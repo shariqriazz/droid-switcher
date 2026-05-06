@@ -12,6 +12,7 @@ normal OAuth flow.
 
 - Stores any number of Droid accounts locally
 - Switches the active `~/.factory` auth between saved accounts
+- Syncs refreshed live auth back into the saved active account
 - Keeps friendly labels separate from stable account ids
 - Supports an active account and an optional default account
 - Shows clean quota summaries for the `5h`, `1wk`, and `1month` `/limits` windows
@@ -53,6 +54,12 @@ For commands that need an account, the selection order is:
 3. Default account
 4. Interactive picker
 
+When the picker is used, you can select by:
+
+- number
+- stable account id
+- unique friendly label
+
 That matters most for:
 
 - `droid-switcher quota`
@@ -75,7 +82,7 @@ common operations:
 - remove an account
 
 `droid-switcher select` and bare `droid-switcher switch` also support picking
-accounts by number.
+accounts by number. Destructive removal is confirmed in the interactive flow.
 
 ## Common Commands
 
@@ -84,6 +91,7 @@ accounts by number.
 ```bash
 droid-switcher login work
 droid-switcher login work --label "Main Work"
+droid-switcher login work --force
 droid-switcher login personal
 droid-switcher login
 ```
@@ -104,10 +112,13 @@ droid-switcher save-current work
 droid-switcher save-current --label "Imported Work"
 droid-switcher save-current
 droid-switcher save-current work --force
+droid-switcher sync-current
 ```
 
 Use this when you already logged in through normal Droid before using the
-switcher.
+switcher. `sync-current` is the manual escape hatch for copying the currently
+live `~/.factory` auth back into the active saved account after normal Droid use
+refreshes tokens.
 
 ### Switch accounts
 
@@ -123,6 +134,8 @@ Only these files are swapped into the real `~/.factory`:
 - `auth.v2.key`
 
 Current auth is backed up before replacement when valid auth already exists.
+Before switching away from an active saved account, the switcher also syncs the
+live auth back into that saved account when it detects changes.
 
 ### Quota
 
@@ -160,9 +173,12 @@ changing the underlying saved account id.
 droid-switcher list
 droid-switcher current
 droid-switcher rename old-name new-name
+droid-switcher sync-current
 droid-switcher remove old-name
+droid-switcher remove old-name --yes
 droid-switcher where
 droid-switcher help
+droid-switcher version
 ```
 
 ## Local Files

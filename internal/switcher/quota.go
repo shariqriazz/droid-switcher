@@ -23,6 +23,9 @@ type LimitWindow struct {
 
 func Quota(p Paths, opts QuotaOptions, stdout io.Writer) error {
 	if opts.All {
+		if strings.TrimSpace(opts.Account) != "" {
+			return fmt.Errorf("cannot combine --all with an explicit account")
+		}
 		return quotaAll(p, opts, stdout)
 	}
 	accountName := opts.Account
@@ -75,16 +78,21 @@ func quotaAll(p Paths, opts QuotaOptions, stdout io.Writer) error {
 	if len(ready) == 0 {
 		return fmt.Errorf("no ready accounts saved; run droid-switcher login <account> first")
 	}
+	hadErrors := false
 	for i, account := range ready {
 		if i > 0 {
 			fmt.Fprintln(stdout)
 		}
 		report, err := quotaForAccount(p, account.Name, opts)
 		if err != nil {
+			hadErrors = true
 			fmt.Fprintf(stdout, "%s\n  error: %v\n", account.Name, err)
 			continue
 		}
 		printQuotaReport(stdout, report, opts.Raw)
+	}
+	if hadErrors {
+		return fmt.Errorf("one or more accounts failed quota collection")
 	}
 	return nil
 }

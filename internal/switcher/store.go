@@ -36,22 +36,30 @@ func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error
 		return fmt.Errorf("current Factory home is not logged in: %w", err)
 	}
 	dst := p.AccountFactoryHome(name)
+	exists, err := fileExists(dst)
+	if err != nil {
+		return err
+	}
+	existingMeta, err := loadAccountMetadata(p, name)
+	if err != nil {
+		return err
+	}
 	if !opts.Force {
-		if _, err := os.Stat(dst); err == nil {
+		if exists {
 			return fmt.Errorf("account %q already exists; pass --force to overwrite it", name)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
 		}
 	}
 	if err := os.MkdirAll(dst, 0o700); err != nil {
 		return err
 	}
-	for _, file := range authFiles {
-		if err := copyFile(filepath.Join(p.FactoryHome, file), filepath.Join(dst, file), 0o600); err != nil {
-			return err
-		}
+	if err := copyDirFiles(p.FactoryHome, dst, 0o600, authFiles); err != nil {
+		return err
 	}
-	if err := saveAccountMetadata(p, name, AccountMetadata{Label: opts.Label}); err != nil {
+	label := strings.TrimSpace(opts.Label)
+	if label == "" && exists {
+		label = existingMeta.Label
+	}
+	if err := saveAccountMetadata(p, name, AccountMetadata{Label: label}); err != nil {
 		return err
 	}
 	return writeActive(p, name, stdout)
@@ -67,6 +75,9 @@ func SwitchAccount(p Paths, name string, stdout io.Writer) error {
 		return fmt.Errorf("saved account %q is not usable: %w", name, err)
 	}
 	if err := os.MkdirAll(p.FactoryHome, 0o700); err != nil {
+		return err
+	}
+	if err := SyncCurrentAuthToSavedAccount(p, io.Discard); err != nil {
 		return err
 	}
 	if err := BackupCurrentAuth(p); err != nil {
@@ -133,7 +144,11 @@ func RemoveAccount(p Paths, name string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(filepath.Join(p.Accounts, name)); err != nil {
+	root := filepath.Join(p.Accounts, name)
+	if _, err := os.Stat(root); err != nil {
+		return fmt.Errorf("account %q does not exist: %w", name, err)
+	}
+	if err := os.RemoveAll(root); err != nil {
 		return err
 	}
 	active, _, _ := CurrentAccount(p)
@@ -257,16 +272,11 @@ func BackupCurrentAuth(p Paths) error {
 	if EnsureAuth(p.FactoryHome) != nil {
 		return nil
 	}
-	backupDir := filepath.Join(p.Store, "backups", time.Now().Format("20060102-150405"))
+	backupDir := filepath.Join(p.Store, "backups", fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), randomSuffix()[:6]))
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return err
 	}
-	for _, file := range authFiles {
-		if err := copyFile(filepath.Join(p.FactoryHome, file), filepath.Join(backupDir, file), 0o600); err != nil {
-			return err
-		}
-	}
-	return nil
+	return copyDirFiles(p.FactoryHome, backupDir, 0o600, authFiles)
 }
 
 func writeActive(p Paths, name string, stdout io.Writer) error {
@@ -277,5 +287,44 @@ func writeActive(p Paths, name string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Active account: %s\n", name)
+	return nil
+}
+
+func SyncCurrentAuthToSavedAccount(p Paths, stdout io.Writer) error {
+	active, ok, err := CurrentAccount(p)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	src := p.FactoryHome
+	dst := p.AccountFactoryHome(active)
+	if err := EnsureAuth(src); err != nil {
+		return nil
+	}
+	if err := EnsureAuth(dst); err != nil {
+		return nil
+	}
+	changed := false
+	for _, file := range authFiles {
+		same, err := sameContent(filepath.Join(src, file), filepath.Join(dst, file))
+		if err != nil {
+			return err
+		}
+		if !same {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := copyDirFiles(src, dst, 0o600, authFiles); err != nil {
+		return err
+	}
+	if stdout != nil {
+		fmt.Fprintf(stdout, "Synced current auth back to saved account: %s\n", active)
+	}
 	return nil
 }

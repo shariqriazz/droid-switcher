@@ -149,6 +149,14 @@ func RunMenu(c CLI) error {
 		if err != nil {
 			return err
 		}
+		confirm, err := promptLine(c.Stdin, c.Stdout, fmt.Sprintf("Type %q to confirm removal: ", name))
+		if err != nil {
+			return err
+		}
+		if confirm != name {
+			fmt.Fprintln(c.Stdout, "Removal cancelled.")
+			return nil
+		}
 		return c.Run([]string{"droid-switcher", "remove", name})
 	default:
 		PrintUsage(c.Stdout)

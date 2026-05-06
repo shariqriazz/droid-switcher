@@ -38,6 +38,9 @@ The user can enter either:
 
 - a number from the menu
 - a stable account id by name
+- a unique friendly label
+
+If multiple saved accounts share the same label, label-based selection is rejected as ambiguous.
 
 ### Quota behavior
 
@@ -60,12 +63,15 @@ under that account’s isolated Factory home. It then attempts to summarize thre
 
 If parsing fails or Factory changes the output format, `--raw` exposes the original Droid output.
 
+If `quota --all` is used and any account fails quota collection, the command still prints per-account results but returns a non-zero error so scripts can detect partial failure. Using `--all` with an explicit account is treated as invalid input.
+
 ## Decisions and Trade-offs
 
 - The menu is text-first and stdlib-driven. That keeps it portable and easy to maintain, even if it is not a full-screen TUI.
 - Interactive flows reuse the direct command handlers rather than implementing separate logic paths, which reduces drift between menu and CLI usage.
 - Quota parsing is intentionally narrow: it targets the three operator-important windows instead of trying to fully model every possible `/limits` output variant.
 - Labels improve UX without replacing stable ids, so users can have friendly names while the storage layer still references deterministic account keys.
+- Direct CLI removal requires explicit confirmation unless `--yes` is passed, while the interactive remove flow confirms inline before dispatching the actual command.
 
 ## Gotchas
 

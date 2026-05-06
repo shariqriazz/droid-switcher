@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,6 +19,56 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return os.WriteFile(dst, data, mode)
+}
+
+func copyDirFiles(srcDir, dstDir string, mode os.FileMode, files []string) error {
+	for _, file := range files {
+		if err := copyFile(filepath.Join(srcDir, file), filepath.Join(dstDir, file), mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func sameContent(a, b string) (bool, error) {
+	ab, err := os.ReadFile(a)
+	if err != nil {
+		return false, err
+	}
+	bb, err := os.ReadFile(b)
+	if err != nil {
+		return false, err
+	}
+	if len(ab) != len(bb) {
+		return false, nil
+	}
+	for i := range ab {
+		if ab[i] != bb[i] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func writerIsTerminal(w io.Writer) bool {
+	if f, ok := w.(*os.File); ok {
+		info, err := f.Stat()
+		if err == nil {
+			return (info.Mode() & os.ModeCharDevice) != 0
+		}
+	}
+	return false
 }
 
 func atomicCopy(src, dst string, mode os.FileMode) error {

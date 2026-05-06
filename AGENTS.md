@@ -25,6 +25,7 @@ Go | standard library CLI and filesystem code | Droid CLI delegation
 
 - The switcher must keep using Droid's own login flow rather than reimplementing auth. `internal/switcher/login.go` launches `droid` with `FACTORY_HOME_OVERRIDE` so OAuth state is created by Droid itself.
 - Account switching only replaces `auth.v2.file` and `auth.v2.key`; do not expand the swap surface without a concrete reason. That contract is encoded in `internal/switcher/constants.go` and applied in `internal/switcher/store.go`.
+- Sync-back from the live `~/.factory` into the active saved account is part of the safety model now. Changes to switching logic must preserve `internal/switcher/store.go::SyncCurrentAuthToSavedAccount` behavior or replace it deliberately.
 - Quota is derived from Droid `/limits` output, then summarized into the `5h`, `1wk`, and `1month` windows. Any parsing change must stay resilient to formatting drift and preserve `--raw` as the fallback. See `internal/switcher/quota.go`.
 - Interactive UX is a core product surface here, not a bolt-on helper. Running with no args enters the numbered menu in `internal/switcher/ui.go`, and `select`/bare `switch` rely on `internal/switcher/interactive.go`.
 - Account labels and default-account state live alongside saved accounts and affect list, current, select, and quota displays. Keep those views consistent when changing metadata behavior. See `internal/switcher/metadata.go`, `internal/switcher/store.go`, and `internal/switcher/cli.go`.

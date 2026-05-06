@@ -56,6 +56,24 @@ func SelectAccount(p Paths, stdin io.Reader, stdout io.Writer) (string, error) {
 		return ready[idx-1].Name, nil
 	}
 	name, err := CleanAccountName(choice)
+	if err == nil {
+		for _, account := range ready {
+			if account.Name == name {
+				return name, nil
+			}
+		}
+	}
+	matches := matchAccountsByLabel(ready, choice)
+	if len(matches) == 1 {
+		return matches[0].Name, nil
+	}
+	if len(matches) > 1 {
+		var labels []string
+		for _, account := range matches {
+			labels = append(labels, displayAccount(account))
+		}
+		return "", fmt.Errorf("label %q is ambiguous: %s", choice, strings.Join(labels, ", "))
+	}
 	if err != nil {
 		return "", err
 	}
@@ -65,4 +83,18 @@ func SelectAccount(p Paths, stdin io.Reader, stdout io.Writer) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("account %q is not saved or is missing auth files", name)
+}
+
+func matchAccountsByLabel(accounts []AccountStatus, input string) []AccountStatus {
+	var matches []AccountStatus
+	input = strings.TrimSpace(strings.ToLower(input))
+	if input == "" {
+		return nil
+	}
+	for _, account := range accounts {
+		if strings.ToLower(strings.TrimSpace(account.Label)) == input {
+			matches = append(matches, account)
+		}
+	}
+	return matches
 }

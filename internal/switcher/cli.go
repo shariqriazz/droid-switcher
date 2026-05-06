@@ -44,17 +44,18 @@ func (c CLI) Run(args []string) error {
 		fs.SetOutput(stderr)
 		droidPath := fs.String("droid", "droid", "path to the droid executable")
 		label := fs.String("label", "", "friendly label for the account")
+		force := fs.Bool("force", false, "overwrite an existing saved account")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
 		if fs.NArg() > 1 {
-			return errors.New("usage: droid-switcher login [account] [--label text] [--droid /path/to/droid]")
+			return errors.New("usage: droid-switcher login [account] [--label text] [--force] [--droid /path/to/droid]")
 		}
 		name := ""
 		if fs.NArg() == 1 {
 			name = fs.Arg(0)
 		}
-		return Login(p, name, *droidPath, *label, stdout)
+		return Login(p, name, *droidPath, *label, *force, stdout)
 	case "switch":
 		fs := flag.NewFlagSet("switch", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -121,6 +122,16 @@ func (c CLI) Run(args []string) error {
 			name = fs.Arg(0)
 		}
 		return SaveCurrent(p, name, SaveOptions{Force: *force, Label: *label}, stdout)
+	case "sync-current":
+		fs := flag.NewFlagSet("sync-current", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: droid-switcher sync-current")
+		}
+		return SyncCurrentAuthToSavedAccount(p, stdout)
 	case "list":
 		return printAccountList(p, stdout)
 	case "current":
@@ -172,13 +183,32 @@ func (c CLI) Run(args []string) error {
 	case "remove":
 		fs := flag.NewFlagSet("remove", flag.ContinueOnError)
 		fs.SetOutput(stderr)
+		yes := fs.Bool("yes", false, "skip removal confirmation")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: droid-switcher remove <account>")
+			return errors.New("usage: droid-switcher remove <account> [--yes]")
+		}
+		if !*yes {
+			if !writerIsTerminal(stdout) {
+				return errors.New("remove requires --yes outside an interactive terminal")
+			}
+			confirm, err := promptLine(c.Stdin, stdout, fmt.Sprintf("Type %q to confirm removal: ", fs.Arg(0)))
+			if err != nil {
+				return err
+			}
+			if confirm != fs.Arg(0) {
+				return errors.New("removal cancelled")
+			}
 		}
 		return RemoveAccount(p, fs.Arg(0), stdout)
+	case "version":
+		if len(args) != 2 {
+			return errors.New("usage: droid-switcher version")
+		}
+		fmt.Fprintln(stdout, version)
+		return nil
 	case "where":
 		fmt.Fprintf(stdout, "store: %s\nfactory_home: %s\n", p.Store, p.FactoryHome)
 		return nil
@@ -196,6 +226,7 @@ func PrintUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   droid-switcher login [account]         Run Droid's own OAuth flow in an isolated account home
   droid-switcher save-current [account]  Save the current ~/.factory auth as an account
+  droid-switcher sync-current            Sync the live ~/.factory auth back into the active saved account
   droid-switcher switch [account]        Make an account active for normal droid runs
   droid-switcher select                  Pick a saved account interactively
   droid-switcher quota [account]         Show Factory quota by running Droid /limits as that account
@@ -207,6 +238,7 @@ func PrintUsage(w io.Writer) {
   droid-switcher label <account> <text>  Set a friendly label
   droid-switcher default <account>       Set the default account
   droid-switcher remove <account>        Delete a saved account
+  droid-switcher version                 Print the build version
   droid-switcher where                   Show switcher storage paths
 
 The switcher stores account homes under ~/.droid-switcher/accounts and only

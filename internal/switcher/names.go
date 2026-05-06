@@ -3,6 +3,7 @@ package switcher
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -28,9 +29,9 @@ func ResolveAccountName(p Paths, requested string) (string, bool, error) {
 	}
 	for i := 0; i < 100; i++ {
 		candidate := fmt.Sprintf("account-%s-%s", time.Now().Format("20060102-150405"), randomSuffix()[:6])
-		if _, err := osStat(p.AccountFactoryHome(candidate)); errors.Is(err, errNotExist()) {
+		if _, err := os.Stat(p.AccountFactoryHome(candidate)); errors.Is(err, os.ErrNotExist) {
 			return candidate, true, nil
-		} else if err != nil && !errors.Is(err, errNotExist()) {
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", false, err
 		}
 	}

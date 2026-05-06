@@ -19,6 +19,7 @@ Last verified: 2026-05-07
 | `internal/switcher/quota.go` | `/limits` execution and quota-window summarization |
 | `internal/switcher/metadata.go` | Label/default-account metadata persisted alongside saved accounts |
 | `internal/switcher/fileops.go` | Atomic file writes and copies for auth and metadata state |
+| `internal/switcher/version.go` | Build-time version surface for the CLI |
 
 ## Flow / How It Works
 
@@ -51,11 +52,13 @@ The `droid` binary remains the source of truth for authentication creation and `
 - The codebase prefers standard library primitives over external CLI/TUI dependencies, which keeps the binary small and the behavior easy to audit.
 - The repo separates command routing, interactive UX, storage, and Droid delegation into distinct files so user-facing changes do not force filesystem or process-runner edits.
 - Metadata such as labels and defaults is intentionally lightweight. The stable account id remains the filesystem key, while labels only affect UX surfaces.
+- The switcher now includes a tiny build-time `version` surface, but keeps release metadata optional by defaulting to `dev` when nothing is injected.
 
 ## Gotchas
 
 - `internal/switcher/login.go` must keep using `FACTORY_HOME_OVERRIDE`; bypassing that would mix account state into the real `~/.factory`.
 - `internal/switcher/store.go` treats “active” and “default” as separate concepts. Changes that collapse them would alter quota and menu behavior.
+- `internal/switcher/store.go` also owns sync-back from live `~/.factory` into the active saved account. That behavior is part of the account-safety contract, not a convenience detail.
 - `internal/switcher/fileops.go` uses atomic writes for state files. Replacing those writes with direct writes would make interruptions riskier.
 - `internal/switcher/quota.go` depends on human-readable `/limits` output, so `--raw` is part of the contract when parsing drifts.
 

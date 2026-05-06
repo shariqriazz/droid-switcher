@@ -89,6 +89,22 @@ func TestSelectAccountByNumber(t *testing.T) {
 	}
 }
 
+func TestSelectAccountByUniqueLabel(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeAuth(t, p.AccountFactoryHome("alpha"), "a", "a-key")
+	writeAuth(t, p.AccountFactoryHome("beta"), "b", "b-key")
+	if err := saveAccountMetadata(p, "beta", AccountMetadata{Label: "Team Beta"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := SelectAccount(p, strings.NewReader("Team Beta\n"), &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "beta" {
+		t.Fatalf("selected %q, want beta", got)
+	}
+}
+
 func TestQuotaRunsDroidLimitsForActiveAccount(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	writeAuth(t, p.AccountFactoryHome("work"), "file", "key")
@@ -125,6 +141,13 @@ func TestQuotaRunsDroidLimitsForActiveAccount(t *testing.T) {
 	}
 }
 
+func TestQuotaAllWithExplicitAccountErrors(t *testing.T) {
+	err := Quota(NewPaths(t.TempDir()), QuotaOptions{All: true, Account: "work"}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "cannot combine --all") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseLimitWindows(t *testing.T) {
 	raw := `
 Plan: Pro
@@ -158,6 +181,25 @@ func TestSaveCurrentRequiresForceForExistingAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authFileName), "two")
+}
+
+func TestSaveCurrentForcePreservesExistingLabel(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeAuth(t, p.FactoryHome, "one", "one-key")
+	if err := SaveCurrent(p, "work", SaveOptions{Label: "Work Label"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	writeAuth(t, p.FactoryHome, "two", "two-key")
+	if err := SaveCurrent(p, "work", SaveOptions{Force: true}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadAccountMetadata(p, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Label != "Work Label" {
+		t.Fatalf("label = %q", meta.Label)
+	}
 }
 
 func TestSaveCurrentBlankNameGenerates(t *testing.T) {
@@ -217,6 +259,87 @@ func TestSwitchWithoutNameSelectsInteractively(t *testing.T) {
 	assertFile(t, p.ActiveFile, "alpha\n")
 }
 
+func TestLoginRequiresForceForExistingAccount(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeAuth(t, p.AccountFactoryHome("work"), "file", "key")
+	oldRunDroid := runDroid
+	runDroid = func(r DroidRunner, factoryHome string, args ...string) error { return nil }
+	defer func() { runDroid = oldRunDroid }()
+	err := Login(p, "work", "droid-test", "", false, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "pass --force") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoginForcePreservesExistingLabel(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeAuth(t, p.AccountFactoryHome("work"), "old-file", "old-key")
+	if err := saveAccountMetadata(p, "work", AccountMetadata{Label: "Existing Label"}); err != nil {
+		t.Fatal(err)
+	}
+	oldRunDroid := runDroid
+	runDroid = func(r DroidRunner, factoryHome string, args ...string) error {
+		writeAuth(t, factoryHome, "new-file", "new-key")
+		return nil
+	}
+	defer func() { runDroid = oldRunDroid }()
+	if err := Login(p, "work", "droid-test", "", true, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := loadAccountMetadata(p, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Label != "Existing Label" {
+		t.Fatalf("label = %q", meta.Label)
+	}
+}
+
+func TestSyncCurrentAuthToSavedAccount(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeAuth(t, p.AccountFactoryHome("work"), "old-file", "old-key")
+	writeAuth(t, p.FactoryHome, "new-file", "new-key")
+	if err := atomicWriteFile(p.ActiveFile, []byte("work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := SyncCurrentAuthToSavedAccount(p, &out); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authFileName), "new-file")
+	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyFileName), "new-key")
+	if !strings.Contains(out.String(), "Synced current auth") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRemoveAccountMissingErrors(t *testing.T) {
+	err := RemoveAccount(NewPaths(t.TempDir()), "ghost", &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRemoveAccountClearsMarkers(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeAuth(t, p.AccountFactoryHome("work"), "file", "key")
+	if err := atomicWriteFile(p.ActiveFile, []byte("work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDefaultAccount(p, "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveAccount(p, "work", &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := CurrentAccount(p); ok {
+		t.Fatal("expected active marker cleared")
+	}
+	if _, ok, _ := CurrentDefaultAccount(p); ok {
+		t.Fatal("expected default marker cleared")
+	}
+}
+
 func TestSetLabelAndDefault(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	writeAuth(t, p.AccountFactoryHome("alpha"), "file", "key")
@@ -246,6 +369,69 @@ func TestNoArgsOpensMenu(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Droid Switcher") || !strings.Contains(out.String(), "What do you want to do?") {
 		t.Fatalf("unexpected menu output: %q", out.String())
+	}
+}
+
+func TestPrintCurrentFallsBackToDefault(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeAuth(t, p.AccountFactoryHome("alpha"), "file", "key")
+	if err := saveAccountMetadata(p, "alpha", AccountMetadata{Label: "Alpha Label"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDefaultAccount(p, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := printCurrent(p, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "default: Alpha Label (alpha)") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestPromptMenuChoiceErrors(t *testing.T) {
+	_, err := promptMenuChoice(strings.NewReader("x\n"), &bytes.Buffer{}, "Title", []string{"a"})
+	if err == nil {
+		t.Fatal("expected invalid choice error")
+	}
+	_, err = promptMenuChoice(strings.NewReader("2\n"), &bytes.Buffer{}, "Title", []string{"a"})
+	if err == nil {
+		t.Fatal("expected out of range error")
+	}
+}
+
+func TestVersionCommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	cli := CLI{Paths: NewPaths(t.TempDir()), Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut}
+	if err := cli.Run([]string{"droid-switcher", "version"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out.String()) != version {
+		t.Fatalf("version output = %q", out.String())
+	}
+}
+
+func TestRemoveRequiresYesOutsideInteractiveTerminal(t *testing.T) {
+	var out, errOut bytes.Buffer
+	cli := CLI{Paths: NewPaths(t.TempDir()), Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut}
+	err := cli.Run([]string{"droid-switcher", "remove", "ghost"})
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEmptyListAndQuotaError(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	var out bytes.Buffer
+	if err := printAccountList(p, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "No accounts saved.") {
+		t.Fatalf("unexpected list output: %q", out.String())
+	}
+	if err := Quota(p, QuotaOptions{All: true}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected quota error when no accounts exist")
 	}
 }
 
