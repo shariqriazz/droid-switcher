@@ -1,6 +1,6 @@
 # Account Lifecycle
 
-Last verified: 2026-05-07
+Last verified: 2026-06-07
 
 ## Purpose
 
@@ -26,7 +26,7 @@ This subsystem manages the full lifecycle of a saved Droid account: naming, logi
 2. If the name is blank, a unique generated id like `account-YYYYMMDD-HHMMSS-xxxxxx` is used.
 3. The account gets its own isolated Factory home under `~/.droid-switcher/accounts/<name>/.factory`.
 4. Non-auth config files such as `settings.json`, `settings-server.json`, and `mcp.json` are copied into that isolated home.
-5. `droid` is launched with `FACTORY_HOME_OVERRIDE=<account-home>`, so Droid itself creates the OAuth state there.
+5. `droid` is launched with `FACTORY_HOME_OVERRIDE=<account-root>`, where `<account-root>` is `~/.droid-switcher/accounts/<name>`. Current Droid creates OAuth state in `<account-root>/.factory`.
 6. After Droid exits, the switcher validates that `auth.v2.file` and `auth.v2.key` exist and marks the account active.
 
 ### Saving the currently active local Droid auth
@@ -72,6 +72,7 @@ Before the switch, the tool attempts to sync the current live auth back into the
 ## Gotchas
 
 - `internal/switcher/store.go` only switches the two auth files. If a future change requires more state to move, the docs and constants must change together.
+- `internal/switcher/droid.go` normalizes saved `.factory` paths before setting `FACTORY_HOME_OVERRIDE`; passing the `.factory` directory itself makes current Droid look under `.factory/.factory`.
 - `internal/switcher/login.go` seeds some config files into the isolated Factory home before launching Droid. Removing that seeding would make some account homes feel less like the real Droid environment.
 - `internal/switcher/metadata.go` stores labels outside the `.factory` directory, so tooling that copies only `.factory` will not preserve friendly labels.
 - Force-overwrite behavior for both `save-current` and `login` is explicit. Without `--force`, existing saved accounts are protected from accidental replacement.

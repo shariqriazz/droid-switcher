@@ -10,7 +10,7 @@ Modularized documentation for Droid Switcher.
 |-----|-------------|--------|
 | [architecture.md](./architecture.md) | High-level structure, execution model, and subsystem boundaries | Done |
 | [account-lifecycle.md](./account-lifecycle.md) | How accounts are created, stored, labeled, switched, and removed | Done |
-| [interactive-cli-and-quota.md](./interactive-cli-and-quota.md) | Interactive menu flows, selection UX, and `/limits` quota summarization | Done |
+| [interactive-cli-and-quota.md](./interactive-cli-and-quota.md) | Interactive menu flows, selection UX, and limits quota summarization | Done |
 
 ---
 

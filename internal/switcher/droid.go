@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 type DroidRunner struct {
@@ -32,7 +33,7 @@ func NewDroidRunner(path string) DroidRunner {
 
 func (r DroidRunner) Run(factoryHome string, args ...string) error {
 	cmd := exec.Command(r.Path, args...)
-	cmd.Env = append(os.Environ(), "FACTORY_HOME_OVERRIDE="+factoryHome)
+	cmd.Env = append(os.Environ(), "FACTORY_HOME_OVERRIDE="+droidOverrideHome(factoryHome))
 	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
@@ -40,4 +41,12 @@ func (r DroidRunner) Run(factoryHome string, args ...string) error {
 		return fmt.Errorf("droid exited with error: %w", err)
 	}
 	return nil
+}
+
+func droidOverrideHome(factoryHome string) string {
+	clean := filepath.Clean(factoryHome)
+	if filepath.Base(clean) == factoryDirName {
+		return filepath.Dir(clean)
+	}
+	return factoryHome
 }

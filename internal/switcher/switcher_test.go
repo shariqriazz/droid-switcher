@@ -2,11 +2,17 @@ package switcher
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCleanAccountName(t *testing.T) {
@@ -105,9 +111,13 @@ func TestSelectAccountByUniqueLabel(t *testing.T) {
 	}
 }
 
-func TestQuotaRunsDroidLimitsForActiveAccount(t *testing.T) {
+func TestQuotaFetchesFactoryLimitsForActiveAccount(t *testing.T) {
 	p := NewPaths(t.TempDir())
-	writeAuth(t, p.AccountFactoryHome("work"), "file", "key")
+	writeEncryptedAuth(t, p.AccountFactoryHome("work"), droidCredentials{
+		AccessToken:          testJWT(time.Now().Add(time.Hour)),
+		RefreshToken:         "refresh-token",
+		ActiveOrganizationID: "org-work",
+	})
 	if err := saveAccountMetadata(p, "work", AccountMetadata{Label: "Work Label"}); err != nil {
 		t.Fatal(err)
 	}
@@ -115,29 +125,31 @@ func TestQuotaRunsDroidLimitsForActiveAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var gotHome string
-	var gotArgs []string
-	oldRunDroid := runDroid
-	runDroid = func(r DroidRunner, factoryHome string, args ...string) error {
-		gotHome = factoryHome
-		gotArgs = append([]string(nil), args...)
-		return nil
-	}
-	defer func() { runDroid = oldRunDroid }()
+	calls := 0
+	withQuotaServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/api/billing/limits" {
+			t.Fatalf("path = %q, want /api/billing/limits", r.URL.Path)
+		}
+		if got := r.Header.Get(factoryOrgHeader); got != "org-work" {
+			t.Fatalf("org header = %q, want org-work", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usesTokenRateLimitsBilling":true,"limits":{"standard":{"fiveHour":{"usedPercent":10,"secondsRemaining":3600},"weekly":{"usedPercent":20,"secondsRemaining":7200},"monthly":{"usedPercent":30,"secondsRemaining":10800}}}}`))
+	}))
 
 	var out bytes.Buffer
 	if err := Quota(p, QuotaOptions{Droid: "droid-test"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if gotHome != p.AccountFactoryHome("work") {
-		t.Fatalf("factory home = %q, want %q", gotHome, p.AccountFactoryHome("work"))
-	}
-	wantArgs := []string{"exec", "--output-format", "text", "/limits"}
-	if !reflect.DeepEqual(gotArgs, wantArgs) {
-		t.Fatalf("args = %#v, want %#v", gotArgs, wantArgs)
+	if calls != 1 {
+		t.Fatalf("limits calls = %d, want 1", calls)
 	}
 	if !strings.Contains(out.String(), "Work Label (work)") {
 		t.Fatalf("expected label in quota output, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "5h     10% used, resets in 1h") {
+		t.Fatalf("expected formatted quota output, got %q", out.String())
 	}
 }
 
@@ -145,6 +157,143 @@ func TestQuotaAllWithExplicitAccountErrors(t *testing.T) {
 	err := Quota(NewPaths(t.TempDir()), QuotaOptions{All: true, Account: "work"}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "cannot combine --all") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCLIQuotaShortCommandAndFlags(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeEncryptedAuth(t, p.AccountFactoryHome("alpha"), droidCredentials{
+		AccessToken:  testJWT(time.Now().Add(time.Hour)),
+		RefreshToken: "alpha-refresh",
+	})
+	writeEncryptedAuth(t, p.AccountFactoryHome("beta"), droidCredentials{
+		AccessToken:  testJWT(time.Now().Add(time.Hour)),
+		RefreshToken: "beta-refresh",
+	})
+
+	calls := 0
+	withQuotaServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/api/billing/limits" {
+			t.Fatalf("path = %q, want /api/billing/limits", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usesTokenRateLimitsBilling":true,"limits":{"standard":{"fiveHour":{"usedPercent":1},"weekly":{"usedPercent":2},"monthly":{"usedPercent":3}}}}`))
+	}))
+
+	var out, errOut bytes.Buffer
+	cli := CLI{Paths: p, Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut}
+	if err := cli.Run([]string{"drsw", "q", "-a", "-r"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("runDroid calls = %d, want 2", calls)
+	}
+	if !strings.Contains(out.String(), "alpha") || !strings.Contains(out.String(), "beta") {
+		t.Fatalf("expected both accounts in output, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "raw:") {
+		t.Fatalf("expected raw output from -r, got %q", out.String())
+	}
+}
+
+func TestCLIQuotaParsesRawAfterAccount(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeEncryptedAuth(t, p.AccountFactoryHome("alpha"), droidCredentials{
+		AccessToken:  testJWT(time.Now().Add(time.Hour)),
+		RefreshToken: "alpha-refresh",
+	})
+	withQuotaServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/billing/limits" {
+			t.Fatalf("path = %q, want /api/billing/limits", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usesTokenRateLimitsBilling":true,"limits":{"standard":{"fiveHour":{"usedPercent":7},"weekly":{"usedPercent":8},"monthly":{"usedPercent":9}}}}`))
+	}))
+
+	var out, errOut bytes.Buffer
+	cli := CLI{Paths: p, Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errOut}
+	if err := cli.Run([]string{"drsw", "q", "alpha", "-r"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "raw:") || !strings.Contains(out.String(), "7% used") {
+		t.Fatalf("expected quota and raw output, got %q", out.String())
+	}
+}
+
+func TestQuotaRefreshesExpiredAccessToken(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeEncryptedAuth(t, p.AccountFactoryHome("work"), droidCredentials{
+		AccessToken:          testJWT(time.Now().Add(-time.Hour)),
+		RefreshToken:         "old-refresh",
+		ActiveOrganizationID: "org-work",
+	})
+	if err := atomicWriteFile(p.ActiveFile, []byte("work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	newAccess := testJWT(time.Now().Add(time.Hour))
+	var refreshed, fetched bool
+	withQuotaServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/authenticate":
+			refreshed = true
+			if err := r.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Form.Get("refresh_token"); got != "old-refresh" {
+				t.Fatalf("refresh token = %q, want old-refresh", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":` + strconv.Quote(newAccess) + `,"refresh_token":"new-refresh"}`))
+		case "/api/billing/limits":
+			fetched = true
+			if got := r.Header.Get("Authorization"); got != "Bearer "+newAccess {
+				t.Fatalf("authorization header used stale token")
+			}
+			if got := r.Header.Get(factoryOrgHeader); got != "org-work" {
+				t.Fatalf("org header = %q, want org-work", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"usesTokenRateLimitsBilling":true,"limits":{"standard":{"fiveHour":{"usedPercent":4},"weekly":{"usedPercent":5},"monthly":{"usedPercent":6}}}}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+
+	if err := Quota(p, QuotaOptions{Account: "work"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !refreshed || !fetched {
+		t.Fatalf("refreshed=%v fetched=%v, want both true", refreshed, fetched)
+	}
+	creds, err := loadDroidCredentials(p.AccountFactoryHome("work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.AccessToken != newAccess || creds.RefreshToken != "new-refresh" || creds.ActiveOrganizationID != "org-work" {
+		t.Fatalf("unexpected saved credentials after refresh: access=%v refresh=%q org=%q", creds.AccessToken == newAccess, creds.RefreshToken, creds.ActiveOrganizationID)
+	}
+	liveCreds, err := loadDroidCredentials(p.FactoryHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveCreds.AccessToken != newAccess || liveCreds.RefreshToken != "new-refresh" || liveCreds.ActiveOrganizationID != "org-work" {
+		t.Fatalf("unexpected live credentials after active refresh: access=%v refresh=%q org=%q", liveCreds.AccessToken == newAccess, liveCreds.RefreshToken, liveCreds.ActiveOrganizationID)
+	}
+}
+
+func TestDroidOverrideHomeUsesFactoryParent(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	got := droidOverrideHome(p.AccountFactoryHome("work"))
+	want := filepath.Join(p.Accounts, "work")
+	if got != want {
+		t.Fatalf("override home = %q, want %q", got, want)
+	}
+
+	custom := filepath.Join(t.TempDir(), "factory-home")
+	if got := droidOverrideHome(custom); got != custom {
+		t.Fatalf("custom override home = %q, want %q", got, custom)
 	}
 }
 
@@ -446,6 +595,54 @@ func writeAuth(t *testing.T, factoryHome, fileContent, keyContent string) {
 	if err := os.WriteFile(filepath.Join(factoryHome, authKeyFileName), []byte(keyContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeEncryptedAuth(t *testing.T, factoryHome string, creds droidCredentials) {
+	t.Helper()
+	if err := os.MkdirAll(factoryHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key := bytes.Repeat([]byte{7}, droidAuthKeySize)
+	encrypted, err := encryptDroidCredentials(creds, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(factoryHome, authFileName), []byte(encrypted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(factoryHome, authKeyFileName), []byte(base64.StdEncoding.EncodeToString(key)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testJWT(exp time.Time) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+	payload, err := json.Marshal(map[string]any{
+		"exp":   exp.Unix(),
+		"sub":   "user-1",
+		"email": "user@example.com",
+	})
+	if err != nil {
+		panic(err)
+	}
+	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+}
+
+func withQuotaServer(t *testing.T, handler http.Handler) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	oldClient := quotaHTTPClient
+	oldFactory := factoryAPIBaseURL
+	oldWorkOS := workOSBaseURL
+	quotaHTTPClient = server.Client()
+	factoryAPIBaseURL = server.URL
+	workOSBaseURL = server.URL
+	t.Cleanup(func() {
+		quotaHTTPClient = oldClient
+		factoryAPIBaseURL = oldFactory
+		workOSBaseURL = oldWorkOS
+		server.Close()
+	})
 }
 
 func assertFile(t *testing.T, path, want string) {

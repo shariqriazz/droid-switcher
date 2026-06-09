@@ -1,7 +1,7 @@
 package switcher
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"regexp"
@@ -22,6 +22,9 @@ type LimitWindow struct {
 }
 
 func Quota(p Paths, opts QuotaOptions, stdout io.Writer) error {
+	if err := SyncCurrentAuthToSavedAccount(p, io.Discard); err != nil {
+		return err
+	}
 	if opts.All {
 		if strings.TrimSpace(opts.Account) != "" {
 			return fmt.Errorf("cannot combine --all with an explicit account")
@@ -98,31 +101,8 @@ func quotaAll(p Paths, opts QuotaOptions, stdout io.Writer) error {
 }
 
 func quotaForAccount(p Paths, accountName string, opts QuotaOptions) (quotaReport, error) {
-	name, err := CleanAccountName(accountName)
-	if err != nil {
-		return quotaReport{}, err
-	}
-	factoryHome := p.AccountFactoryHome(name)
-	if err := EnsureAuth(factoryHome); err != nil {
-		return quotaReport{}, fmt.Errorf("saved account %q is not usable: %w", name, err)
-	}
-	var out bytes.Buffer
-	runner := NewDroidRunner(opts.Droid)
-	runner.Stdout = &out
-	if err := runDroid(runner, factoryHome, "exec", "--output-format", "text", "/limits"); err != nil {
-		return quotaReport{}, err
-	}
-	raw := strings.TrimSpace(out.String())
-	meta, err := loadAccountMetadata(p, name)
-	if err != nil {
-		return quotaReport{}, err
-	}
-	return quotaReport{
-		Account: name,
-		Label:   meta.Label,
-		Raw:     raw,
-		Windows: parseLimitWindows(raw),
-	}, nil
+	_ = opts
+	return fetchQuotaReport(context.Background(), p, accountName)
 }
 
 func printQuotaReport(stdout io.Writer, report quotaReport, raw bool) {

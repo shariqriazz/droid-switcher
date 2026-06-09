@@ -36,7 +36,7 @@ droid-switcher
 Compare quota across all saved accounts:
 
 ```bash
-droid-switcher quota --all
+drsw q -a
 ```
 
 Set the default fallback account:
@@ -140,20 +140,21 @@ live auth back into that saved account when it detects changes.
 ### Quota
 
 ```bash
-droid-switcher quota work
-droid-switcher quota
-droid-switcher quota --all
-droid-switcher quota --all --raw
+drsw q work
+drsw q
+drsw q -a
+drsw q -a -r
 ```
 
-Quota uses Droid's `/limits` output and summarizes:
+Quota uses Factory's limits API with each saved Droid login and summarizes the
+same operator-facing windows as `/limits`:
 
 - `5h`
 - `1wk`
 - `1month`
 
-Use `--raw` if Factory changes the `/limits` display and you want to inspect
-the original Droid output.
+Use `--raw`/`-r` if Factory changes the limits response and you want to inspect
+the original API output.
 
 ### Labels and defaults
 

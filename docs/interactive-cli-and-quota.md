@@ -1,10 +1,10 @@
 # Interactive CLI and Quota
 
-Last verified: 2026-05-07
+Last verified: 2026-06-07
 
 ## Purpose
 
-This subsystem turns the switcher from a raw file-management tool into an operator-friendly CLI: direct commands, interactive menus, number-based account selection, and clean quota views derived from Droid `/limits`.
+This subsystem turns the switcher from a raw file-management tool into an operator-friendly CLI: direct commands, interactive menus, number-based account selection, and clean quota views derived from Factory limits for saved Droid accounts.
 
 ## Key Files
 
@@ -13,7 +13,9 @@ This subsystem turns the switcher from a raw file-management tool into an operat
 | `internal/switcher/cli.go` | Command surface, flags, and textual output for list/current/help |
 | `internal/switcher/ui.go` | No-argument menu with guided flows for common tasks |
 | `internal/switcher/interactive.go` | Number-based account picker used by `select` and bare `switch` |
-| `internal/switcher/quota.go` | Runs `/limits`, parses the `5h`, `1wk`, and `1month` windows, and renders summaries |
+| `internal/switcher/quota.go` | Resolves target accounts and renders quota summaries |
+| `internal/switcher/auth.go` | Reads and rewrites Droid's encrypted `auth.v2.file` / `auth.v2.key` pair |
+| `internal/switcher/factory_limits.go` | Refreshes expired saved tokens, calls Factory limits, and maps the `5h`, `1wk`, and `1month` windows |
 | `internal/switcher/display.go` | Builds user-facing account display strings from labels and ids |
 | `internal/switcher/store.go` | Supplies account state that drives menu badges and fallback behavior |
 | `internal/switcher/switcher_test.go` | Behavioral tests for menu entry, selection, and quota invocation |
@@ -51,17 +53,18 @@ If multiple saved accounts share the same label, label-based selection is reject
 3. Default account marker
 4. Interactive picker
 
-Once an account is selected, the switcher runs:
+Once an account is selected, the switcher:
 
-`droid exec --output-format text /limits`
-
-under that account’s isolated Factory home. It then attempts to summarize three windows:
+1. Reads that account's encrypted Droid auth from `auth.v2.file` and `auth.v2.key`.
+2. Refreshes an expired WorkOS access token with the saved refresh token.
+3. Calls `GET /api/billing/limits` with Droid-compatible Factory headers.
+4. Summarizes three `standard` billing windows:
 
 - `5h`
 - `1wk`
 - `1month`
 
-If parsing fails or Factory changes the output format, `--raw` exposes the original Droid output.
+If Factory changes the response format, `--raw` exposes the original JSON API output.
 
 If `quota --all` is used and any account fails quota collection, the command still prints per-account results but returns a non-zero error so scripts can detect partial failure. Using `--all` with an explicit account is treated as invalid input.
 
@@ -69,13 +72,14 @@ If `quota --all` is used and any account fails quota collection, the command sti
 
 - The menu is text-first and stdlib-driven. That keeps it portable and easy to maintain, even if it is not a full-screen TUI.
 - Interactive flows reuse the direct command handlers rather than implementing separate logic paths, which reduces drift between menu and CLI usage.
-- Quota parsing is intentionally narrow: it targets the three operator-important windows instead of trying to fully model every possible `/limits` output variant.
+- Quota rendering is intentionally narrow: it targets the three operator-important windows instead of trying to fully model every possible billing response variant.
 - Labels improve UX without replacing stable ids, so users can have friendly names while the storage layer still references deterministic account keys.
 - Direct CLI removal requires explicit confirmation unless `--yes` is passed, while the interactive remove flow confirms inline before dispatching the actual command.
 
 ## Gotchas
 
-- `internal/switcher/quota.go` parses human-readable text, not a stable API response. Keep `--raw` working as the escape hatch.
+- `internal/switcher/factory_limits.go` depends on Droid's current encrypted auth-file format. Login must continue to be delegated to Droid itself so the switcher does not own OAuth creation.
+- `--raw` is the escape hatch if Factory changes the limits JSON shape or adds fields that should be surfaced.
 - `internal/switcher/ui.go` currently assumes one line of input per prompt via scanners. If the menu ever becomes persistent or multi-step within one scanner, that input strategy may need to change.
 - `internal/switcher/interactive.go` hides accounts without valid auth. That is correct for switching, but it means broken saved accounts disappear from selection until repaired.
 - `internal/switcher/cli.go::printCurrent` surfaces the default account when no active marker exists. That is a UX choice, not proof that the default account is currently switched into `~/.factory`.

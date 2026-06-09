@@ -34,7 +34,7 @@ func Login(p Paths, name, droidPath, label string, force bool, stdout io.Writer)
 		return err
 	}
 
-	fmt.Fprintf(stdout, "Starting Droid with FACTORY_HOME_OVERRIDE=%s\n", accountHome)
+	fmt.Fprintf(stdout, "Starting Droid with FACTORY_HOME_OVERRIDE=%s\n", droidOverrideHome(accountHome))
 	fmt.Fprintln(stdout, "Complete Droid login in that session, then exit Droid. This account will be saved automatically.")
 
 	if err := runDroid(NewDroidRunner(droidPath), accountHome); err != nil {
