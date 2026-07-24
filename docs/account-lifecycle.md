@@ -1,6 +1,6 @@
 # Account Lifecycle
 
-Last verified: 2026-06-07
+Last verified: 2026-07-24
 
 ## Purpose
 
@@ -27,7 +27,12 @@ This subsystem manages the full lifecycle of a saved Droid account: naming, logi
 3. The account gets its own isolated Factory home under `~/.droid-switcher/accounts/<name>/.factory`.
 4. Non-auth config files such as `settings.json`, `settings-server.json`, and `mcp.json` are copied into that isolated home.
 5. `droid` is launched with `FACTORY_HOME_OVERRIDE=<account-root>`, where `<account-root>` is `~/.droid-switcher/accounts/<name>`. Current Droid creates OAuth state in `<account-root>/.factory`.
-6. After Droid exits, the switcher validates that `auth.v2.file` and `auth.v2.key` exist and marks the account active.
+6. After Droid exits, the switcher validates that `auth.v2.file` and `auth.v2.key` exist.
+7. The live `~/.factory` auth is backed up, the newly authenticated pair is copied into place, and the account is marked active.
+
+Before starting the isolated login, the switcher syncs the previous active
+account from live auth. This ordering prevents a later quota or switch command
+from copying stale live credentials over a newly authenticated account.
 
 ### Saving the currently active local Droid auth
 
@@ -66,6 +71,7 @@ Before the switch, the tool attempts to sync the current live auth back into the
 - Email addresses are not inferred from auth state or Droid output. The code prefers generated ids plus optional labels over brittle identity scraping.
 - `save-current` and `login` share the same account model so imported accounts and Droid-created accounts behave identically later.
 - `login` now follows the same overwrite-safety contract as `save-current`: existing saved accounts require explicit `--force`.
+- A successful login is also a real switch: the active marker and live Factory auth always refer to the newly authenticated account.
 - Renaming changes the stable account id and moves the account directory. Labels exist so users do not need to rename accounts just to improve display text.
 - Removal clears active/default markers when they reference the deleted account so the CLI does not silently point at missing state.
 

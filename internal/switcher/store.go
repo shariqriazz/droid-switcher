@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// AccountStatus combines saved auth readiness with active/default metadata.
 type AccountStatus struct {
 	Name    string
 	Label   string
@@ -19,11 +20,13 @@ type AccountStatus struct {
 	Ready   bool
 }
 
+// SaveOptions controls replacement and labeling when importing live auth.
 type SaveOptions struct {
 	Force bool
 	Label string
 }
 
+// SaveCurrent imports the live Factory auth pair into a saved account.
 func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error {
 	name, generated, err := ResolveAccountName(p, name)
 	if err != nil {
@@ -65,6 +68,7 @@ func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error
 	return writeActive(p, name, stdout)
 }
 
+// SwitchAccount syncs the previous account and activates a saved auth pair.
 func SwitchAccount(p Paths, name string, stdout io.Writer) error {
 	name, err := CleanAccountName(name)
 	if err != nil {
@@ -74,10 +78,15 @@ func SwitchAccount(p Paths, name string, stdout io.Writer) error {
 	if err := EnsureAuth(src); err != nil {
 		return fmt.Errorf("saved account %q is not usable: %w", name, err)
 	}
-	if err := os.MkdirAll(p.FactoryHome, 0o700); err != nil {
+	if err := SyncCurrentAuthToSavedAccount(p, io.Discard); err != nil {
 		return err
 	}
-	if err := SyncCurrentAuthToSavedAccount(p, io.Discard); err != nil {
+	return activateSavedAccount(p, name, stdout)
+}
+
+func activateSavedAccount(p Paths, name string, stdout io.Writer) error {
+	src := p.AccountFactoryHome(name)
+	if err := os.MkdirAll(p.FactoryHome, 0o700); err != nil {
 		return err
 	}
 	if err := BackupCurrentAuth(p); err != nil {
@@ -91,6 +100,7 @@ func SwitchAccount(p Paths, name string, stdout io.Writer) error {
 	return writeActive(p, name, stdout)
 }
 
+// ListAccounts returns saved accounts sorted by stable id.
 func ListAccounts(p Paths) ([]AccountStatus, error) {
 	entries, err := os.ReadDir(p.Accounts)
 	if errors.Is(err, os.ErrNotExist) {
@@ -127,6 +137,7 @@ func ListAccounts(p Paths) ([]AccountStatus, error) {
 	return accounts, nil
 }
 
+// CurrentAccount returns the account whose auth is active in the live home.
 func CurrentAccount(p Paths) (string, bool, error) {
 	active, err := os.ReadFile(p.ActiveFile)
 	if errors.Is(err, os.ErrNotExist) {
@@ -139,6 +150,7 @@ func CurrentAccount(p Paths) (string, bool, error) {
 	return name, name != "", nil
 }
 
+// RemoveAccount deletes a saved account and clears markers that reference it.
 func RemoveAccount(p Paths, name string, stdout io.Writer) error {
 	name, err := CleanAccountName(name)
 	if err != nil {
@@ -163,6 +175,7 @@ func RemoveAccount(p Paths, name string, stdout io.Writer) error {
 	return nil
 }
 
+// RenameAccount changes a stable id and updates active/default markers.
 func RenameAccount(p Paths, oldName, newName string, stdout io.Writer) error {
 	oldName, err := CleanAccountName(oldName)
 	if err != nil {
@@ -201,6 +214,7 @@ func RenameAccount(p Paths, oldName, newName string, stdout io.Writer) error {
 	return nil
 }
 
+// SetAccountLabel updates optional display metadata without changing the id.
 func SetAccountLabel(p Paths, name, label string, stdout io.Writer) error {
 	name, err := CleanAccountName(name)
 	if err != nil {
@@ -220,6 +234,7 @@ func SetAccountLabel(p Paths, name, label string, stdout io.Writer) error {
 	return nil
 }
 
+// SetDefaultAccount configures the fallback for quota and menu flows.
 func SetDefaultAccount(p Paths, name string, stdout io.Writer) error {
 	name, err := CleanAccountName(name)
 	if err != nil {
@@ -235,6 +250,7 @@ func SetDefaultAccount(p Paths, name string, stdout io.Writer) error {
 	return nil
 }
 
+// ClearDefaultAccount removes the optional fallback marker.
 func ClearDefaultAccount(p Paths, stdout io.Writer) error {
 	if err := clearDefaultAccount(p); err != nil {
 		return err
@@ -243,6 +259,7 @@ func ClearDefaultAccount(p Paths, stdout io.Writer) error {
 	return nil
 }
 
+// EnsureAuth verifies that both required Droid auth files are non-empty.
 func EnsureAuth(factoryHome string) error {
 	for _, file := range authFiles {
 		info, err := os.Stat(filepath.Join(factoryHome, file))
@@ -256,6 +273,7 @@ func EnsureAuth(factoryHome string) error {
 	return nil
 }
 
+// SeedNonAuthFactoryFiles copies safe configuration into an isolated login home.
 func SeedNonAuthFactoryFiles(srcFactoryHome, dstFactoryHome string) error {
 	for _, file := range seedFiles {
 		src := filepath.Join(srcFactoryHome, file)
@@ -268,6 +286,7 @@ func SeedNonAuthFactoryFiles(srcFactoryHome, dstFactoryHome string) error {
 	return nil
 }
 
+// BackupCurrentAuth snapshots valid live auth before it is replaced.
 func BackupCurrentAuth(p Paths) error {
 	if EnsureAuth(p.FactoryHome) != nil {
 		return nil
@@ -290,6 +309,7 @@ func writeActive(p Paths, name string, stdout io.Writer) error {
 	return nil
 }
 
+// SyncCurrentAuthToSavedAccount preserves live token refreshes for the active account.
 func SyncCurrentAuthToSavedAccount(p Paths, stdout io.Writer) error {
 	active, ok, err := CurrentAccount(p)
 	if err != nil {

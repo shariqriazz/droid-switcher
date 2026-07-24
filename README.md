@@ -8,6 +8,17 @@ It does not reimplement Droid auth. Instead, it launches the real `droid`
 binary with `FACTORY_HOME_OVERRIDE` so each saved account goes through Droid's
 normal OAuth flow.
 
+## Installation
+
+Build and install both `droid-switcher` and its `drsw` shorthand:
+
+```bash
+make install
+```
+
+The Makefile installs into `GOBIN`, or the first `GOPATH/bin` directory when
+`GOBIN` is unset.
+
 ## What It Does
 
 - Stores any number of Droid accounts locally
@@ -96,6 +107,9 @@ droid-switcher login personal
 droid-switcher login
 ```
 
+After login completes, the new saved auth is copied into `~/.factory` and the
+account becomes active. Existing live auth is backed up first.
+
 If you leave the account name blank, the switcher generates a safe id like:
 
 ```text
@@ -156,6 +170,13 @@ same operator-facing windows as `/limits`:
 Use `--raw`/`-r` if Factory changes the limits response and you want to inspect
 the original API output.
 
+If WorkOS reports that a saved session has ended, authenticate that account
+again:
+
+```bash
+droid-switcher login work --force
+```
+
 ### Labels and defaults
 
 ```bash
@@ -182,6 +203,23 @@ droid-switcher help
 droid-switcher version
 ```
 
+## Development
+
+The project targets Go 1.26.5 and pins its lint and vulnerability tools through
+`go.mod`.
+
+```bash
+make test        # unit tests
+make test-race   # shuffled tests with race detection
+make lint        # golangci-lint, staticcheck, gosec, vet-style checks
+make vuln        # govulncheck
+make verify      # complete local quality gate
+make build       # creates bin/droid-switcher and bin/drsw
+```
+
+CI runs the same test, static-analysis, and vulnerability checks. Dependabot
+keeps Go tooling and GitHub Actions updates visible as reviewable pull requests.
+
 ## Local Files
 
 - Active Droid auth: `~/.factory/auth.v2.file` and `~/.factory/auth.v2.key`
@@ -196,6 +234,7 @@ droid-switcher version
 - [Architecture](./docs/architecture.md)
 - [Account Lifecycle](./docs/account-lifecycle.md)
 - [Interactive CLI and Quota](./docs/interactive-cli-and-quota.md)
+- [Contributing](./CONTRIBUTING.md)
 
 ## License
 

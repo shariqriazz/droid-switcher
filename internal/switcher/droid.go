@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 )
 
+// DroidRunner describes a Droid child process and its standard streams.
 type DroidRunner struct {
 	Path   string
 	Stdin  io.Reader
@@ -19,6 +20,7 @@ var runDroid = func(r DroidRunner, factoryHome string, args ...string) error {
 	return r.Run(factoryHome, args...)
 }
 
+// NewDroidRunner creates an interactive runner for the requested Droid binary.
 func NewDroidRunner(path string) DroidRunner {
 	if path == "" {
 		path = "droid"
@@ -31,8 +33,10 @@ func NewDroidRunner(path string) DroidRunner {
 	}
 }
 
+// Run launches Droid with an isolated Factory home and waits for it to exit.
 func (r DroidRunner) Run(factoryHome string, args ...string) error {
-	cmd := exec.Command(r.Path, args...)
+	// r.Path is either the trusted default or an explicit --droid executable selected by the user.
+	cmd := exec.Command(r.Path, args...) //nolint:gosec,noctx // The interactive child owns its lifetime and the executable is user-selected.
 	cmd.Env = append(os.Environ(), "FACTORY_HOME_OVERRIDE="+droidOverrideHome(factoryHome))
 	cmd.Stdin = r.Stdin
 	cmd.Stdout = r.Stdout

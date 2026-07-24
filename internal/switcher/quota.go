@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// QuotaOptions selects quota targets and output detail.
 type QuotaOptions struct {
 	Account string
 	All     bool
@@ -16,11 +17,13 @@ type QuotaOptions struct {
 	Stdin   io.Reader
 }
 
+// LimitWindow is one summarized Factory billing window.
 type LimitWindow struct {
 	Window string
 	Text   string
 }
 
+// Quota reports limits for one account or every ready saved account.
 func Quota(p Paths, opts QuotaOptions, stdout io.Writer) error {
 	if err := SyncCurrentAuthToSavedAccount(p, io.Discard); err != nil {
 		return err
@@ -129,7 +132,7 @@ func printQuotaReport(stdout io.Writer, report quotaReport, raw bool) {
 }
 
 func printIndented(stdout io.Writer, text string) {
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimRight(line, " \t")
 		if line == "" {
 			continue

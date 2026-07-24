@@ -1,6 +1,6 @@
 # Architecture
 
-Last verified: 2026-06-07
+Last verified: 2026-07-24
 
 ## Purpose
 
@@ -22,6 +22,8 @@ Last verified: 2026-06-07
 | `internal/switcher/metadata.go` | Label/default-account metadata persisted alongside saved accounts |
 | `internal/switcher/fileops.go` | Atomic file writes and copies for auth and metadata state |
 | `internal/switcher/version.go` | Build-time version surface for the CLI |
+| `Makefile` | Shared build, test, static-analysis, vulnerability-scan, and install entry points |
+| `.github/workflows/ci.yml` | Remote test, lint, and vulnerability quality gates |
 
 ## Flow / How It Works
 
@@ -56,6 +58,7 @@ The `droid` binary remains the source of truth for authentication creation. The 
 - The repo separates command routing, interactive UX, storage, and Droid delegation into distinct files so user-facing changes do not force filesystem or process-runner edits.
 - Metadata such as labels and defaults is intentionally lightweight. The stable account id remains the filesystem key, while labels only affect UX surfaces.
 - The switcher now includes a tiny build-time `version` surface, but keeps release metadata optional by defaulting to `dev` when nothing is injected.
+- Development tools are pinned with Go tool directives so local Make targets and CI use the same golangci-lint and govulncheck versions.
 
 ## Gotchas
 

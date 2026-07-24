@@ -11,14 +11,15 @@ import (
 )
 
 func copyFile(src, dst string, mode os.FileMode) error {
-	data, err := os.ReadFile(src)
+	// Callers construct src from validated switcher and Factory home paths.
+	data, err := os.ReadFile(src) //nolint:gosec // Source paths are scoped by the storage layer.
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, mode)
+	return os.WriteFile(dst, data, mode) //nolint:gosec // Destination paths are scoped by the storage layer.
 }
 
 func copyDirFiles(srcDir, dstDir string, mode os.FileMode, files []string) error {
@@ -42,11 +43,11 @@ func fileExists(path string) (bool, error) {
 }
 
 func sameContent(a, b string) (bool, error) {
-	ab, err := os.ReadFile(a)
+	ab, err := os.ReadFile(a) //nolint:gosec // Both paths are scoped by the storage layer.
 	if err != nil {
 		return false, err
 	}
-	bb, err := os.ReadFile(b)
+	bb, err := os.ReadFile(b) //nolint:gosec // Both paths are scoped by the storage layer.
 	if err != nil {
 		return false, err
 	}
@@ -72,7 +73,7 @@ func writerIsTerminal(w io.Writer) bool {
 }
 
 func atomicCopy(src, dst string, mode os.FileMode) error {
-	data, err := os.ReadFile(src)
+	data, err := os.ReadFile(src) //nolint:gosec // Source paths are scoped by the storage layer.
 	if err != nil {
 		return err
 	}
@@ -84,7 +85,7 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	tmp := path + ".tmp-" + randomSuffix()
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	if err := os.WriteFile(tmp, data, mode); err != nil { //nolint:gosec // tmp is created inside the validated destination directory.
 		return err
 	}
 	if err := os.Chmod(tmp, mode); err != nil {

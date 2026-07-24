@@ -1,4 +1,6 @@
 droid-switcher
+/bin/
+/coverage.out
 .DS_Store
 *.swp
 *.swo

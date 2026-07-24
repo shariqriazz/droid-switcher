@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// CLI holds the filesystem and I/O dependencies used by command handlers.
 type CLI struct {
 	Paths  Paths
 	Stdin  io.Reader
@@ -16,6 +17,7 @@ type CLI struct {
 	Stderr io.Writer
 }
 
+// Run executes the CLI against the current user's default storage paths.
 func Run(args []string, stdout, stderr io.Writer) error {
 	p, err := DefaultPaths()
 	if err != nil {
@@ -24,10 +26,12 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	return CLI{Paths: p, Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}.Run(args)
 }
 
+// RunWithPaths executes the CLI with explicit paths for embedding and tests.
 func RunWithPaths(args []string, p Paths, stdout, stderr io.Writer) error {
 	return CLI{Paths: p, Stdin: os.Stdin, Stdout: stdout, Stderr: stderr}.Run(args)
 }
 
+// Run routes one command invocation and returns usage or runtime failures.
 func (c CLI) Run(args []string) error {
 	p := c.Paths
 	stdout := c.Stdout
@@ -153,12 +157,12 @@ func (c CLI) Run(args []string) error {
 	case "label", "lbl":
 		fs := flag.NewFlagSet("label", flag.ContinueOnError)
 		fs.SetOutput(stderr)
-		clear := boolFlag(fs, "clear", "c", false, "clear the label")
+		clearFlag := boolFlag(fs, "clear", "c", false, "clear the label")
 		positionals, err := parseInterspersed(fs, args[2:])
 		if err != nil {
 			return err
 		}
-		if *clear {
+		if *clearFlag {
 			if len(positionals) != 1 {
 				return errors.New("usage: droid-switcher label <account> --clear|-c")
 			}
@@ -171,12 +175,12 @@ func (c CLI) Run(args []string) error {
 	case "default", "def":
 		fs := flag.NewFlagSet("default", flag.ContinueOnError)
 		fs.SetOutput(stderr)
-		clear := boolFlag(fs, "clear", "c", false, "clear the default account")
+		clearFlag := boolFlag(fs, "clear", "c", false, "clear the default account")
 		positionals, err := parseInterspersed(fs, args[2:])
 		if err != nil {
 			return err
 		}
-		if *clear {
+		if *clearFlag {
 			if len(positionals) != 0 {
 				return errors.New("usage: droid-switcher default --clear|-c")
 			}
@@ -291,6 +295,7 @@ func flagIsBool(f *flag.Flag) bool {
 	return ok && value.IsBoolFlag()
 }
 
+// PrintUsage writes the supported command and flag surface.
 func PrintUsage(w io.Writer) {
 	fmt.Fprintln(w, `Usage:
   droid-switcher login|add [account]          Run Droid's own OAuth flow in an isolated account home

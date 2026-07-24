@@ -1,0 +1,50 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - errcheck
+    - errorlint
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - modernize
+    - noctx
+    - nolintlint
+    - revive
+    - staticcheck
+    - testifylint
+    - thelper
+    - unused
+    - usetesting
+  settings:
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    gosec:
+      excludes:
+        # The CLI checks argument lengths before each indexed access. G602's
+        # taint pass does not currently retain those control-flow guards.
+        - G602
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true
