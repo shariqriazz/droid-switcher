@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// CleanAccountName validates a stable account id for safe local storage.
 func CleanAccountName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || name == "." || name == ".." {
@@ -22,12 +23,13 @@ func CleanAccountName(name string) (string, error) {
 	return name, nil
 }
 
+// ResolveAccountName validates an id or generates a unique one when blank.
 func ResolveAccountName(p Paths, requested string) (string, bool, error) {
 	if strings.TrimSpace(requested) != "" {
 		name, err := CleanAccountName(requested)
 		return name, false, err
 	}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		candidate := fmt.Sprintf("account-%s-%s", time.Now().Format("20060102-150405"), randomSuffix()[:6])
 		if _, err := os.Stat(p.AccountFactoryHome(candidate)); errors.Is(err, os.ErrNotExist) {
 			return candidate, true, nil

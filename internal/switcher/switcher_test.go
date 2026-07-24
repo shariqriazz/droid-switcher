@@ -244,6 +244,9 @@ func TestQuotaRefreshesExpiredAccessToken(t *testing.T) {
 			if got := r.Form.Get("refresh_token"); got != "old-refresh" {
 				t.Fatalf("refresh token = %q, want old-refresh", got)
 			}
+			if got := r.Form.Get("organization_id"); got != "org-work" {
+				t.Fatalf("organization id = %q, want org-work", got)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"access_token":` + strconv.Quote(newAccess) + `,"refresh_token":"new-refresh"}`))
 		case "/api/billing/limits":
@@ -280,6 +283,33 @@ func TestQuotaRefreshesExpiredAccessToken(t *testing.T) {
 	}
 	if liveCreds.AccessToken != newAccess || liveCreds.RefreshToken != "new-refresh" || liveCreds.ActiveOrganizationID != "org-work" {
 		t.Fatalf("unexpected live credentials after active refresh: access=%v refresh=%q org=%q", liveCreds.AccessToken == newAccess, liveCreds.RefreshToken, liveCreds.ActiveOrganizationID)
+	}
+}
+
+func TestQuotaExplainsEndedLogin(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeEncryptedAuth(t, p.AccountFactoryHome("bizkit"), droidCredentials{
+		AccessToken:  testJWT(time.Now().Add(-time.Hour)),
+		RefreshToken: "ended-refresh",
+	})
+
+	calls := 0
+	withQuotaServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"Session has already ended."}`))
+	}))
+
+	err := Quota(p, QuotaOptions{Account: "bizkit"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected ended login to fail")
+	}
+	if !strings.Contains(err.Error(), "droid-switcher login bizkit --force") {
+		t.Fatalf("error does not explain recovery: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("refresh calls = %d, want 1 for a permanent error", calls)
 	}
 }
 
@@ -412,7 +442,7 @@ func TestLoginRequiresForceForExistingAccount(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	writeAuth(t, p.AccountFactoryHome("work"), "file", "key")
 	oldRunDroid := runDroid
-	runDroid = func(r DroidRunner, factoryHome string, args ...string) error { return nil }
+	runDroid = func(_ DroidRunner, _ string, _ ...string) error { return nil }
 	defer func() { runDroid = oldRunDroid }()
 	err := Login(p, "work", "droid-test", "", false, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "pass --force") {
@@ -427,7 +457,7 @@ func TestLoginForcePreservesExistingLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldRunDroid := runDroid
-	runDroid = func(r DroidRunner, factoryHome string, args ...string) error {
+	runDroid = func(_ DroidRunner, factoryHome string, _ ...string) error {
 		writeAuth(t, factoryHome, "new-file", "new-key")
 		return nil
 	}
@@ -441,6 +471,59 @@ func TestLoginForcePreservesExistingLabel(t *testing.T) {
 	}
 	if meta.Label != "Existing Label" {
 		t.Fatalf("label = %q", meta.Label)
+	}
+}
+
+func TestLoginActivatesNewCredentials(t *testing.T) {
+	tests := []struct {
+		name          string
+		loginAccount  string
+		activeAccount string
+		force         bool
+	}{
+		{
+			name:          "new account",
+			loginAccount:  "bizkit",
+			activeAccount: "involens",
+		},
+		{
+			name:          "replace active account",
+			loginAccount:  "bizkit",
+			activeAccount: "bizkit",
+			force:         true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewPaths(t.TempDir())
+			writeAuth(t, p.FactoryHome, "old-live-file", "old-live-key")
+			writeAuth(t, p.AccountFactoryHome(tt.activeAccount), "old-saved-file", "old-saved-key")
+			if err := atomicWriteFile(p.ActiveFile, []byte(tt.activeAccount+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			oldRunDroid := runDroid
+			runDroid = func(_ DroidRunner, factoryHome string, _ ...string) error {
+				writeAuth(t, factoryHome, "fresh-login-file", "fresh-login-key")
+				return nil
+			}
+			t.Cleanup(func() { runDroid = oldRunDroid })
+
+			if err := Login(p, tt.loginAccount, "droid-test", "", tt.force, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+
+			assertFile(t, filepath.Join(p.FactoryHome, authFileName), "fresh-login-file")
+			assertFile(t, filepath.Join(p.FactoryHome, authKeyFileName), "fresh-login-key")
+			assertFile(t, filepath.Join(p.AccountFactoryHome(tt.loginAccount), authFileName), "fresh-login-file")
+			assertFile(t, filepath.Join(p.AccountFactoryHome(tt.loginAccount), authKeyFileName), "fresh-login-key")
+			assertFile(t, p.ActiveFile, tt.loginAccount+"\n")
+			if tt.activeAccount != tt.loginAccount {
+				assertFile(t, filepath.Join(p.AccountFactoryHome(tt.activeAccount), authFileName), "old-live-file")
+				assertFile(t, filepath.Join(p.AccountFactoryHome(tt.activeAccount), authKeyFileName), "old-live-key")
+			}
+		})
 	}
 }
 
@@ -647,7 +730,7 @@ func withQuotaServer(t *testing.T, handler http.Handler) {
 
 func assertFile(t *testing.T, path, want string) {
 	t.Helper()
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(path) //nolint:gosec // Test paths are created inside t.TempDir.
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -30,7 +30,8 @@ func loadDroidCredentials(factoryHome string) (droidCredentials, error) {
 	if err != nil {
 		return droidCredentials{}, err
 	}
-	encrypted, err := os.ReadFile(filepath.Join(factoryHome, authFileName))
+	// factoryHome is always a switcher-owned or Factory-owned home, never raw user input.
+	encrypted, err := os.ReadFile(filepath.Join(factoryHome, authFileName)) //nolint:gosec // Path is scoped by validated account storage.
 	if err != nil {
 		return droidCredentials{}, err
 	}
@@ -43,10 +44,10 @@ func loadDroidCredentials(factoryHome string) (droidCredentials, error) {
 		return droidCredentials{}, fmt.Errorf("parse Droid auth credentials: %w", err)
 	}
 	if strings.TrimSpace(creds.AccessToken) == "" {
-		return droidCredentials{}, fmt.Errorf("Droid auth credentials are missing access_token")
+		return droidCredentials{}, fmt.Errorf("droid auth credentials are missing access_token")
 	}
 	if strings.TrimSpace(creds.RefreshToken) == "" {
-		return droidCredentials{}, fmt.Errorf("Droid auth credentials are missing refresh_token")
+		return droidCredentials{}, fmt.Errorf("droid auth credentials are missing refresh_token")
 	}
 	creds.ActiveOrganizationID = strings.TrimSpace(creds.ActiveOrganizationID)
 	return creds, nil
@@ -65,7 +66,8 @@ func saveDroidCredentials(factoryHome string, creds droidCredentials) error {
 }
 
 func readDroidAuthKey(factoryHome string) ([]byte, error) {
-	raw, err := os.ReadFile(filepath.Join(factoryHome, authKeyFileName))
+	// factoryHome is always a switcher-owned or Factory-owned home, never raw user input.
+	raw, err := os.ReadFile(filepath.Join(factoryHome, authKeyFileName)) //nolint:gosec // Path is scoped by validated account storage.
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +120,8 @@ func decryptDroidCredentials(encrypted string, key []byte) ([]byte, error) {
 }
 
 func encryptDroidCredentials(creds droidCredentials, key []byte) (string, error) {
-	plain, err := json.Marshal(creds)
+	// The plaintext exists only in memory and is encrypted with AES-GCM before it is written.
+	plain, err := json.Marshal(creds) //nolint:gosec // Serializing credentials is required for authenticated encryption.
 	if err != nil {
 		return "", err
 	}

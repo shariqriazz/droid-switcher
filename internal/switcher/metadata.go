@@ -13,6 +13,7 @@ const (
 	defaultFileName     = "default"
 )
 
+// AccountMetadata stores optional presentation data for a stable account id.
 type AccountMetadata struct {
 	Label string `json:"label,omitempty"`
 }
@@ -64,6 +65,7 @@ func saveAccountMetadata(p Paths, name string, meta AccountMetadata) error {
 	return atomicWriteFile(accountMetaPath(p, name), data, 0o600)
 }
 
+// CurrentDefaultAccount returns the configured fallback account, if one exists.
 func CurrentDefaultAccount(p Paths) (string, bool, error) {
 	data, err := os.ReadFile(defaultAccountPath(p))
 	if errors.Is(err, os.ErrNotExist) {

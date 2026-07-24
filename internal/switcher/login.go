@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// Login delegates authentication to Droid, saves the result, and activates it.
 func Login(p Paths, name, droidPath, label string, force bool, stdout io.Writer) error {
 	name, generated, err := ResolveAccountName(p, name)
 	if err != nil {
@@ -26,6 +27,9 @@ func Login(p Paths, name, droidPath, label string, force bool, stdout io.Writer)
 	}
 	if exists && !force {
 		return fmt.Errorf("account %q already exists; pass --force to overwrite it", name)
+	}
+	if err := SyncCurrentAuthToSavedAccount(p, io.Discard); err != nil {
+		return fmt.Errorf("sync current auth before login: %w", err)
 	}
 	if err := os.MkdirAll(accountHome, 0o700); err != nil {
 		return err
@@ -49,5 +53,5 @@ func Login(p Paths, name, droidPath, label string, force bool, stdout io.Writer)
 	if err := saveAccountMetadata(p, name, AccountMetadata{Label: label}); err != nil {
 		return err
 	}
-	return writeActive(p, name, stdout)
+	return activateSavedAccount(p, name, stdout)
 }

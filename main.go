@@ -1,10 +1,10 @@
+// Command droid-switcher manages multiple local Factory Droid logins.
 package main
 
 import (
+	"droid-switcher/internal/switcher"
 	"fmt"
 	"os"
-
-	"droid-switcher/internal/switcher"
 )
 
 func main() {

@@ -1,6 +1,6 @@
 # Interactive CLI and Quota
 
-Last verified: 2026-06-07
+Last verified: 2026-07-24
 
 ## Purpose
 
@@ -56,7 +56,7 @@ If multiple saved accounts share the same label, label-based selection is reject
 Once an account is selected, the switcher:
 
 1. Reads that account's encrypted Droid auth from `auth.v2.file` and `auth.v2.key`.
-2. Refreshes an expired WorkOS access token with the saved refresh token.
+2. Refreshes an expired WorkOS access token with the saved refresh token and active organization id.
 3. Calls `GET /api/billing/limits` with Droid-compatible Factory headers.
 4. Summarizes three `standard` billing windows:
 
@@ -65,6 +65,10 @@ Once an account is selected, the switcher:
 - `1month`
 
 If Factory changes the response format, `--raw` exposes the original JSON API output.
+
+WorkOS `invalid_grant` responses are permanent failures. The CLI identifies
+them as ended sessions and prints the account-specific `login --force` recovery
+command instead of retrying the same refresh token.
 
 If `quota --all` is used and any account fails quota collection, the command still prints per-account results but returns a non-zero error so scripts can detect partial failure. Using `--all` with an explicit account is treated as invalid input.
 

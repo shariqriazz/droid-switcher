@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 )
 
+// Paths defines the live Factory home and switcher-owned storage layout.
 type Paths struct {
 	Home        string
 	Store       string
@@ -13,6 +14,7 @@ type Paths struct {
 	FactoryHome string
 }
 
+// DefaultPaths builds the storage layout for the current operating-system user.
 func DefaultPaths() (Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -21,6 +23,7 @@ func DefaultPaths() (Paths, error) {
 	return NewPaths(home), nil
 }
 
+// NewPaths builds the storage layout beneath an explicit home directory.
 func NewPaths(home string) Paths {
 	store := filepath.Join(home, appDirName)
 	return Paths{
@@ -32,6 +35,7 @@ func NewPaths(home string) Paths {
 	}
 }
 
+// AccountFactoryHome returns the isolated Factory home for a saved account.
 func (p Paths) AccountFactoryHome(name string) string {
 	return filepath.Join(p.Accounts, name, factoryDirName)
 }

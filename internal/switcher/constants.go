@@ -8,5 +8,7 @@ const (
 	activeFileName  = "active"
 )
 
-var authFiles = []string{authFileName, authKeyFileName}
-var seedFiles = []string{"settings.json", "settings-server.json", "mcp.json"}
+var (
+	authFiles = []string{authFileName, authKeyFileName}
+	seedFiles = []string{"settings.json", "settings-server.json", "mcp.json"}
+)

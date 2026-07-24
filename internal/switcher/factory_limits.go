@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -22,6 +23,7 @@ const (
 	factoryOrgHeader           = "X-Factory-Org-Id"
 	droidWorkOSClientIDDev     = "client_01HNM7927XNSKCJ4982Z5J3FFZ"
 	droidWorkOSClientIDProd    = "client_01HNM792M5G5G1A2THWPXKFMXB"
+	droidClientVersionDefault  = "0.179.0"
 	tokenExpirySkew            = time.Minute
 	tokenRefreshAttempts       = 3
 )
@@ -71,6 +73,15 @@ func fetchQuotaReport(ctx context.Context, p Paths, accountName string) (quotaRe
 	}
 	creds, refreshed, err := refreshDroidCredentialsIfNeeded(ctx, factoryHome, creds)
 	if err != nil {
+		var refreshErr tokenRefreshError
+		if errors.As(err, &refreshErr) && refreshErr.code == "invalid_grant" {
+			return quotaReport{}, fmt.Errorf(
+				"saved Droid login for %q has ended; run droid-switcher login %s --force: %w",
+				name,
+				name,
+				err,
+			)
+		}
 		return quotaReport{}, err
 	}
 	if refreshed {
@@ -108,7 +119,7 @@ func refreshDroidCredentialsIfNeeded(ctx context.Context, factoryHome string, cr
 	}
 	var lastErr error
 	for attempt := 1; attempt <= tokenRefreshAttempts; attempt++ {
-		next, err := refreshDroidCredentials(ctx, creds.RefreshToken)
+		next, err := refreshDroidCredentials(ctx, creds.RefreshToken, creds.ActiveOrganizationID)
 		if err == nil {
 			next.ActiveOrganizationID = creds.ActiveOrganizationID
 			if err := saveDroidCredentials(factoryHome, next); err != nil {
@@ -117,7 +128,8 @@ func refreshDroidCredentialsIfNeeded(ctx context.Context, factoryHome string, cr
 			return next, true, nil
 		}
 		lastErr = err
-		if refreshErr, ok := err.(tokenRefreshError); ok && refreshErr.permanent {
+		var refreshErr tokenRefreshError
+		if errors.As(err, &refreshErr) && refreshErr.permanent {
 			break
 		}
 		if attempt < tokenRefreshAttempts {
@@ -134,6 +146,7 @@ func refreshDroidCredentialsIfNeeded(ctx context.Context, factoryHome string, cr
 type tokenRefreshError struct {
 	err       error
 	permanent bool
+	code      string
 }
 
 func (e tokenRefreshError) Error() string {
@@ -144,11 +157,14 @@ func (e tokenRefreshError) Unwrap() error {
 	return e.err
 }
 
-func refreshDroidCredentials(ctx context.Context, refreshToken string) (droidCredentials, error) {
+func refreshDroidCredentials(ctx context.Context, refreshToken, organizationID string) (droidCredentials, error) {
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", refreshToken)
 	form.Set("client_id", droidWorkOSClientID())
+	if organizationID != "" {
+		form.Set("organization_id", organizationID)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(workOSBaseURL, "/authenticate"), strings.NewReader(form.Encode()))
 	if err != nil {
 		return droidCredentials{}, err
@@ -158,15 +174,22 @@ func refreshDroidCredentials(ctx context.Context, refreshToken string) (droidCre
 	if err != nil {
 		return droidCredentials{}, tokenRefreshError{err: err}
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return droidCredentials{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var responseError struct {
+			Code string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &responseError)
 		return droidCredentials{}, tokenRefreshError{
 			err:       fmt.Errorf("WorkOS token refresh returned HTTP %d: %s", resp.StatusCode, compactSpace(string(body))),
 			permanent: resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests,
+			code:      responseError.Code,
 		}
 	}
 	var next droidCredentials
@@ -196,13 +219,15 @@ func getBillingLimits(ctx context.Context, creds droidCredentials) ([]byte, bill
 	if err != nil {
 		return nil, billingLimitsResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
 		return nil, billingLimitsResponse{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, billingLimitsResponse{}, fmt.Errorf("Factory limits API returned HTTP %d: %s", resp.StatusCode, compactSpace(string(body)))
+		return nil, billingLimitsResponse{}, fmt.Errorf("factory limits API returned HTTP %d: %s", resp.StatusCode, compactSpace(string(body)))
 	}
 	var limits billingLimitsResponse
 	if err := json.Unmarshal(body, &limits); err != nil {
@@ -307,5 +332,5 @@ func factoryClientType() string {
 }
 
 func droidClientVersion() string {
-	return "0.142.0"
+	return droidClientVersionDefault
 }

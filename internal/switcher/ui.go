@@ -46,6 +46,7 @@ func printBanner(stdout io.Writer) {
 	fmt.Fprintln(stdout)
 }
 
+// RunMenu opens the numbered interactive command surface.
 func RunMenu(c CLI) error {
 	printBanner(c.Stdout)
 	accounts, err := ListAccounts(c.Paths)

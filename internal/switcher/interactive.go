@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// SelectAccount prompts for a ready account by number, id, or unique label.
 func SelectAccount(p Paths, stdin io.Reader, stdout io.Writer) (string, error) {
 	accounts, err := ListAccounts(p)
 	if err != nil {
