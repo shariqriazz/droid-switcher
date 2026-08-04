@@ -1,6 +1,7 @@
 package switcher
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -43,15 +44,128 @@ var readSystemKeyringKey = func() ([]byte, error) {
 	return key, nil
 }
 
-// writeSystemKeyringKey stores Droid's AES key in the OS secret store so the
-// live Droid binary can decrypt an activated keyring-format account.
-var writeSystemKeyringKey = func(key []byte) error {
+// storeSystemKeyringKey writes Droid's AES key to the OS secret store without
+// touching any other entries. Use writeSystemKeyringKey instead; it guarantees
+// the single-entry invariant.
+var storeSystemKeyringKey = func(key []byte) error {
 	cmd := exec.Command("secret-tool", "store", "--label="+droidKeyringService, "service", droidKeyringService, "account", droidKeyringAccount()) //nolint:gosec // Fixed arguments; the secret arrives over stdin.
 	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString(key))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("store Droid encryption key in OS keyring: %w: %s", err, compactSpace(string(out)))
 	}
 	return nil
+}
+
+// clearSystemKeyringKeys removes every OS secret store entry for Droid's key.
+var clearSystemKeyringKeys = func() error {
+	cmd := exec.Command("secret-tool", "clear", "service", droidKeyringService, "account", droidKeyringAccount()) //nolint:gosec // Fixed arguments.
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("clear Droid encryption keys from OS keyring: %w: %s", err, compactSpace(string(out)))
+	}
+	return nil
+}
+
+// readAllSystemKeyringKeys lists every OS secret store entry for Droid's key.
+// Some secret-service backends (ksecretd) keep duplicate items for the same
+// attributes, and plain lookups may then return a stale entry; Droid itself
+// adds a duplicate when it generates a fresh key after a keyring read failure.
+var readAllSystemKeyringKeys = func() ([][]byte, error) {
+	out, err := exec.Command("secret-tool", "search", "--all", "--unlock", "service", droidKeyringService, "account", droidKeyringAccount()).Output() //nolint:gosec // Fixed arguments; secrets stay in process memory.
+	if err != nil {
+		return nil, fmt.Errorf("list Droid encryption keys in OS keyring: %w", err)
+	}
+	var keys [][]byte
+	seen := map[string]bool{}
+	flush := func(block string) {
+		if !strings.Contains(block, "attribute.service = "+droidKeyringService) ||
+			!strings.Contains(block, "attribute.account = "+droidKeyringAccount()) {
+			return
+		}
+		for line := range strings.SplitSeq(block, "\n") {
+			value, ok := strings.CutPrefix(strings.TrimSpace(line), "secret = ")
+			if !ok {
+				continue
+			}
+			key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+			if err != nil || len(key) != droidAuthKeySize {
+				return
+			}
+			if !seen[string(key)] {
+				seen[string(key)] = true
+				keys = append(keys, key)
+			}
+			return
+		}
+	}
+	var block strings.Builder
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if strings.HasPrefix(line, "[/") {
+			flush(block.String())
+			block.Reset()
+		}
+		block.WriteString(line + "\n")
+	}
+	flush(block.String())
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no Droid encryption key entries found in OS keyring")
+	}
+	return keys, nil
+}
+
+// writeSystemKeyringKey stores Droid's AES key in the OS secret store so the
+// live Droid binary can decrypt an activated keyring-format account. Stale
+// duplicates are removed first and the result is verified, because a backend
+// that keeps multiple entries may answer lookups with the wrong key.
+var writeSystemKeyringKey = func(key []byte) error {
+	// A clear failure must not block the first-ever store; the post-store
+	// lookup below still verifies what Droid will read back.
+	_ = clearSystemKeyringKeys()
+	if err := storeSystemKeyringKey(key); err != nil {
+		return err
+	}
+	got, err := readSystemKeyringKey()
+	if err != nil {
+		return fmt.Errorf("verify Droid encryption key in OS keyring after store: %w", err)
+	}
+	if !bytes.Equal(got, key) {
+		return fmt.Errorf("OS keyring still returns a stale Droid encryption key after rewrite; remove duplicate %q/%q entries manually", droidKeyringService, droidKeyringAccount())
+	}
+	return nil
+}
+
+// keyringKeyDecryptsHome reports whether key decrypts the home's keyring file.
+func keyringKeyDecryptsHome(factoryHome string, key []byte) bool {
+	// factoryHome is always a switcher-owned or Factory-owned home, never raw user input.
+	encrypted, err := os.ReadFile(filepath.Join(factoryHome, authKeyringFileName)) //nolint:gosec // Path is scoped by validated account storage.
+	if err != nil {
+		return false
+	}
+	_, err = decryptDroidCredentials(strings.TrimSpace(string(encrypted)), key)
+	return err == nil
+}
+
+// snapshotSystemKeyringKey returns the OS keyring key that actually decrypts
+// the given keyring-format home. The plain lookup result is verified against
+// the ciphertext; on mismatch every keyring entry is tried, which recovers
+// from duplicate entries left behind when Droid generated a fresh key.
+func snapshotSystemKeyringKey(factoryHome string) ([]byte, error) {
+	key, lookupErr := readSystemKeyringKey()
+	if lookupErr == nil && keyringKeyDecryptsHome(factoryHome, key) {
+		return key, nil
+	}
+	candidates, err := readAllSystemKeyringKeys()
+	if err != nil {
+		if lookupErr != nil {
+			return nil, fmt.Errorf("read Droid encryption key from OS keyring: %w (listing all entries also failed: %w)", lookupErr, err)
+		}
+		return nil, err
+	}
+	for _, candidate := range candidates {
+		if keyringKeyDecryptsHome(factoryHome, candidate) {
+			return candidate, nil
+		}
+	}
+	return nil, fmt.Errorf("no OS keyring entry decrypts %s; the key Droid used is missing from the keyring", authKeyringFileName)
 }
 
 // droidKeyringAccount mirrors Droid's keyring item name, including its dev suffix.

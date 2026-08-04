@@ -50,7 +50,7 @@ State is split into two layers:
 1. Per-account isolated Factory homes under `~/.droid-switcher/accounts/<name>/.factory`
 2. Small switcher-owned metadata files for active/default account markers, labels, and backups
 
-The `droid` binary remains the source of truth for authentication creation. The switcher stores Droid's encrypted auth files unchanged for switching, and quota reads those saved credentials only to refresh stale access tokens and call the same Factory limits backend used by Droid. Both of Droid's credential backends are supported: keyfile-v2 (`auth.v2.file` + `auth.v2.key`) and keyring-v2 (`auth.v2.keyring`, the Droid 0.186+ default, whose AES key lives in the OS keyring). For keyring accounts the switcher snapshots that key into the saved account home and restores it into the OS keyring on activation.
+The `droid` binary remains the source of truth for authentication creation. The switcher stores Droid's encrypted auth files unchanged for switching, and quota reads those saved credentials only to refresh stale access tokens and call the same Factory limits backend used by Droid. Both of Droid's credential backends are supported: keyfile-v2 (`auth.v2.file` + `auth.v2.key`) and keyring-v2 (`auth.v2.keyring`, the Droid 0.186+ default, whose AES key lives in the OS keyring). For keyring accounts the switcher snapshots that key into the saved account home and restores it into the OS keyring on activation. Snapshots are verified by decrypting the credentials they protect (with recovery across duplicate keyring entries, which ksecretd keeps and Droid can add), and activation collapses the keyring to a single verified entry so Droid and the switcher always read the same key.
 
 ## Decisions and Trade-offs
 

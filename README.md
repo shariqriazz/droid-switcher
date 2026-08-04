@@ -156,6 +156,13 @@ libsecret's `secret-tool`, and files of the other format are moved into the
 backup directory so Droid cannot pick up a stale login. Keyring support
 therefore requires `secret-tool` (package `libsecret`) on Linux.
 
+Key snapshots are always verified against the encrypted credentials before
+being saved: if the keyring holds stale duplicate entries (some backends keep
+several, and Droid adds one when it generates a fresh key after a keyring read
+failure), every entry is tried and the one that actually decrypts wins.
+Activation rewrites the keyring to a single verified entry, so lookups can
+never return a key that does not match the active account.
+
 Current auth is backed up before replacement when valid auth already exists.
 Before switching away from an active saved account, the switcher also syncs the
 live auth back into that saved account when it detects changes.

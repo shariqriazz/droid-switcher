@@ -603,14 +603,17 @@ func TestSyncCurrentAuthToSavedAccount(t *testing.T) {
 func TestSaveCurrentKeyringFormat(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
-	writeLiveKeyringAuth(t, p.FactoryHome, "live-keyring-cipher")
+	writeLiveEncryptedKeyringAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:  "live-access",
+		RefreshToken: "live-refresh",
+	}, key)
 	stubSystemKeyring(t, key)
 
 	var out bytes.Buffer
 	if err := SaveCurrent(p, "work", SaveOptions{}, &out); err != nil {
 		t.Fatal(err)
 	}
-	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringFileName), "live-keyring-cipher")
+	assertKeyringAuthDecrypts(t, p.AccountFactoryHome("work"), key, "live-access")
 	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringKeyFileName), base64.StdEncoding.EncodeToString(key))
 	if err := EnsureSavedAuth(p.AccountFactoryHome("work")); err != nil {
 		t.Fatal(err)
@@ -623,7 +626,10 @@ func TestSaveCurrentKeyringFormat(t *testing.T) {
 func TestSwitchAccountKeyringRestoresSystemKey(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
-	writeKeyringAuth(t, p.AccountFactoryHome("work"), "work-keyring-cipher", key)
+	writeEncryptedKeyringAuth(t, p.AccountFactoryHome("work"), droidCredentials{
+		AccessToken:  "work-access",
+		RefreshToken: "work-refresh",
+	})
 	writeAuth(t, p.FactoryHome, "live-file", "live-key")
 	written := stubSystemKeyring(t, nil)
 
@@ -631,7 +637,7 @@ func TestSwitchAccountKeyringRestoresSystemKey(t *testing.T) {
 	if err := SwitchAccount(p, "work", &out); err != nil {
 		t.Fatal(err)
 	}
-	assertFile(t, filepath.Join(p.FactoryHome, authKeyringFileName), "work-keyring-cipher")
+	assertKeyringAuthDecrypts(t, p.FactoryHome, key, "work-access")
 	if !bytes.Equal(*written, key) {
 		t.Fatal("expected the saved keyring key to be written to the OS keyring")
 	}
@@ -651,7 +657,10 @@ func TestSwitchAccountKeyringRestoresSystemKey(t *testing.T) {
 func TestSwitchAccountKeyfileDisplacesKeyring(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
-	writeLiveKeyringAuth(t, p.FactoryHome, "live-keyring-cipher")
+	writeLiveEncryptedKeyringAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:  "live-access",
+		RefreshToken: "live-refresh",
+	}, key)
 	writeAuth(t, p.AccountFactoryHome("plain"), "plain-file", "plain-key")
 	stubSystemKeyring(t, key)
 
@@ -671,7 +680,7 @@ func TestSwitchAccountKeyfileDisplacesKeyring(t *testing.T) {
 	if len(backups) != 1 {
 		t.Fatalf("expected one backup directory, got %d", len(backups))
 	}
-	assertFile(t, filepath.Join(backups[0], authKeyringFileName), "live-keyring-cipher")
+	assertKeyringAuthDecrypts(t, backups[0], key, "live-access")
 	assertFile(t, filepath.Join(backups[0], authKeyringKeyFileName), base64.StdEncoding.EncodeToString(key))
 }
 
@@ -679,7 +688,10 @@ func TestSyncCurrentAuthConvertsSavedAccountFormat(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
 	writeAuth(t, p.AccountFactoryHome("work"), "old-file", "old-key")
-	writeLiveKeyringAuth(t, p.FactoryHome, "live-keyring-cipher")
+	writeLiveEncryptedKeyringAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:  "live-access",
+		RefreshToken: "live-refresh",
+	}, key)
 	if err := atomicWriteFile(p.ActiveFile, []byte("work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -689,7 +701,7 @@ func TestSyncCurrentAuthConvertsSavedAccountFormat(t *testing.T) {
 	if err := SyncCurrentAuthToSavedAccount(p, &out); err != nil {
 		t.Fatal(err)
 	}
-	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringFileName), "live-keyring-cipher")
+	assertKeyringAuthDecrypts(t, p.AccountFactoryHome("work"), key, "live-access")
 	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringKeyFileName), base64.StdEncoding.EncodeToString(key))
 	if _, err := os.Stat(filepath.Join(p.AccountFactoryHome("work"), authFileName)); !os.IsNotExist(err) {
 		t.Fatal("expected stale keyfile auth removed from the saved account")
@@ -711,6 +723,122 @@ func TestEnsureSavedAuthRequiresKeyringKeySnapshot(t *testing.T) {
 	err := EnsureSavedAuth(home)
 	if err == nil || !strings.Contains(err.Error(), authKeyringKeyFileName) {
 		t.Fatalf("expected missing key snapshot error, got %v", err)
+	}
+}
+
+func TestEnsureSavedAuthRejectsUndecryptableKeyringSnapshot(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	home := p.AccountFactoryHome("work")
+	rightKey := bytes.Repeat([]byte{9}, droidAuthKeySize)
+	wrongKey := bytes.Repeat([]byte{3}, droidAuthKeySize)
+	encrypted, err := encryptDroidCredentials(droidCredentials{
+		AccessToken:  "access",
+		RefreshToken: "refresh",
+	}, rightKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The snapshot holds a stale keyring entry's key, not the one Droid
+	// encrypted the credentials with.
+	writeKeyringAuth(t, home, encrypted, wrongKey)
+
+	err = EnsureSavedAuth(home)
+	if err == nil || !strings.Contains(err.Error(), "cannot be decrypted") {
+		t.Fatalf("expected undecryptable snapshot error, got %v", err)
+	}
+}
+
+func TestSaveCurrentKeyringRecoversKeyFromDuplicateEntries(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	stale := bytes.Repeat([]byte{1}, droidAuthKeySize)
+	current := bytes.Repeat([]byte{7}, droidAuthKeySize)
+	writeLiveEncryptedKeyringAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:  "live-access",
+		RefreshToken: "live-refresh",
+	}, current)
+	// Droid stored a fresh key next to a stale one and plain lookups return
+	// the stale entry, so the snapshot must come from trying every entry.
+	oldRead, oldReadAll := readSystemKeyringKey, readAllSystemKeyringKeys
+	readSystemKeyringKey = func() ([]byte, error) { return stale, nil }
+	readAllSystemKeyringKeys = func() ([][]byte, error) { return [][]byte{stale, current}, nil }
+	t.Cleanup(func() {
+		readSystemKeyringKey = oldRead
+		readAllSystemKeyringKeys = oldReadAll
+	})
+
+	var out bytes.Buffer
+	if err := SaveCurrent(p, "work", SaveOptions{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringKeyFileName), base64.StdEncoding.EncodeToString(current))
+	if err := EnsureSavedAuth(p.AccountFactoryHome("work")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSaveCurrentKeyringFailsWhenNoEntryDecrypts(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	stale := bytes.Repeat([]byte{1}, droidAuthKeySize)
+	current := bytes.Repeat([]byte{7}, droidAuthKeySize)
+	writeLiveEncryptedKeyringAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:  "live-access",
+		RefreshToken: "live-refresh",
+	}, current)
+	// Droid's key never reached the keyring at all: every entry is stale.
+	oldRead, oldReadAll := readSystemKeyringKey, readAllSystemKeyringKeys
+	readSystemKeyringKey = func() ([]byte, error) { return stale, nil }
+	readAllSystemKeyringKeys = func() ([][]byte, error) { return [][]byte{stale}, nil }
+	t.Cleanup(func() {
+		readSystemKeyringKey = oldRead
+		readAllSystemKeyringKeys = oldReadAll
+	})
+
+	var out bytes.Buffer
+	err := SaveCurrent(p, "work", SaveOptions{}, &out)
+	if err == nil || !strings.Contains(err.Error(), "no OS keyring entry decrypts") {
+		t.Fatalf("expected missing key error, got %v", err)
+	}
+}
+
+func TestWriteSystemKeyringKeyClearsStaleEntriesAndVerifies(t *testing.T) {
+	key := bytes.Repeat([]byte{4}, droidAuthKeySize)
+	stale := bytes.Repeat([]byte{8}, droidAuthKeySize)
+	stored := stale
+	cleared := false
+	oldClear, oldStore, oldRead := clearSystemKeyringKeys, storeSystemKeyringKey, readSystemKeyringKey
+	clearSystemKeyringKeys = func() error {
+		cleared = true
+		stored = nil
+		return nil
+	}
+	storeSystemKeyringKey = func(k []byte) error {
+		stored = k
+		return nil
+	}
+	readSystemKeyringKey = func() ([]byte, error) {
+		if stored == nil {
+			return nil, errors.New("OS keyring has no Droid key")
+		}
+		return stored, nil
+	}
+	t.Cleanup(func() {
+		clearSystemKeyringKeys = oldClear
+		storeSystemKeyringKey = oldStore
+		readSystemKeyringKey = oldRead
+	})
+
+	if err := writeSystemKeyringKey(key); err != nil {
+		t.Fatal(err)
+	}
+	if !cleared {
+		t.Fatal("expected stale keyring entries to be cleared before storing")
+	}
+
+	// A backend that keeps answering lookups with a stale entry must fail
+	// loudly instead of leaving the active account undecryptable for Droid.
+	readSystemKeyringKey = func() ([]byte, error) { return stale, nil }
+	if err := writeSystemKeyringKey(key); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("expected stale-entry verification error, got %v", err)
 	}
 }
 
@@ -922,17 +1050,60 @@ func writeEncryptedKeyringAuth(t *testing.T, factoryHome string, creds droidCred
 	writeKeyringAuth(t, factoryHome, encrypted, key)
 }
 
+// writeLiveEncryptedKeyringAuth creates only the Droid-owned keyring file with
+// really encrypted credentials, matching a live Factory home during login.
+func writeLiveEncryptedKeyringAuth(t *testing.T, factoryHome string, creds droidCredentials, key []byte) {
+	t.Helper()
+	encrypted, err := encryptDroidCredentials(creds, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeLiveKeyringAuth(t, factoryHome, encrypted)
+}
+
+// assertKeyringAuthDecrypts checks the home's keyring file decrypts with key
+// and carries the expected access token.
+func assertKeyringAuthDecrypts(t *testing.T, factoryHome string, key []byte, wantAccessToken string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(factoryHome, authKeyringFileName)) //nolint:gosec // Test fixture path built from t.TempDir().
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := decryptDroidCredentials(strings.TrimSpace(string(raw)), key)
+	if err != nil {
+		t.Fatalf("keyring auth does not decrypt: %v", err)
+	}
+	var creds droidCredentials
+	if err := json.Unmarshal(plain, &creds); err != nil {
+		t.Fatal(err)
+	}
+	if creds.AccessToken != wantAccessToken {
+		t.Fatalf("access token = %q, want %q", creds.AccessToken, wantAccessToken)
+	}
+}
+
 // stubSystemKeyring replaces the OS secret store with an in-memory copy and
 // returns a pointer to whatever was last written to it.
 func stubSystemKeyring(t *testing.T, stored []byte) *[]byte {
 	t.Helper()
 	var written []byte
 	oldRead, oldWrite := readSystemKeyringKey, writeSystemKeyringKey
+	oldReadAll, oldClear := readAllSystemKeyringKeys, clearSystemKeyringKeys
 	readSystemKeyringKey = func() ([]byte, error) {
 		if stored == nil {
 			return nil, errors.New("OS keyring has no Droid key")
 		}
 		return stored, nil
+	}
+	readAllSystemKeyringKeys = func() ([][]byte, error) {
+		if stored == nil {
+			return nil, errors.New("OS keyring has no Droid key")
+		}
+		return [][]byte{stored}, nil
+	}
+	clearSystemKeyringKeys = func() error {
+		stored = nil
+		return nil
 	}
 	writeSystemKeyringKey = func(key []byte) error {
 		written = key
@@ -942,6 +1113,8 @@ func stubSystemKeyring(t *testing.T, stored []byte) *[]byte {
 	t.Cleanup(func() {
 		readSystemKeyringKey = oldRead
 		writeSystemKeyringKey = oldWrite
+		readAllSystemKeyringKeys = oldReadAll
+		clearSystemKeyringKeys = oldClear
 	})
 	return &written
 }

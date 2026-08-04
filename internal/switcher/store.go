@@ -61,7 +61,7 @@ func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error
 		return err
 	}
 	if format == authFormatKeyring {
-		key, err := readSystemKeyringKey()
+		key, err := snapshotSystemKeyringKey(p.FactoryHome)
 		if err != nil {
 			return fmt.Errorf("snapshot Droid keyring key: %w", err)
 		}
@@ -323,14 +323,23 @@ func EnsureAuth(factoryHome string) error {
 }
 
 // EnsureSavedAuth verifies a saved account home is fully usable. Keyring-format
-// accounts additionally need the switcher-owned snapshot of the OS keyring key.
+// accounts additionally need the switcher-owned snapshot of the OS keyring key,
+// and the snapshot must actually decrypt the saved credentials: Droid can leave
+// duplicate keyring entries behind, and an earlier snapshot may hold a stale
+// key that plain lookups returned.
 func EnsureSavedAuth(factoryHome string) error {
 	format, err := requireAuthFormat(factoryHome)
 	if err != nil {
 		return err
 	}
-	if format == authFormatKeyring && !nonEmptyFile(filepath.Join(factoryHome, authKeyringKeyFileName)) {
+	if format != authFormatKeyring {
+		return nil
+	}
+	if !nonEmptyFile(filepath.Join(factoryHome, authKeyringKeyFileName)) {
 		return fmt.Errorf("%s exists but %s is missing; re-save with droid-switcher save --force", authKeyringFileName, authKeyringKeyFileName)
+	}
+	if _, err := loadDroidCredentials(factoryHome); err != nil {
+		return fmt.Errorf("saved %s cannot be decrypted with %s: %w; re-login with droid-switcher login --force or re-save the account while it is active", authKeyringFileName, authKeyringKeyFileName, err)
 	}
 	return nil
 }
@@ -365,7 +374,7 @@ func BackupCurrentAuth(p Paths) (string, error) {
 	if format == authFormatKeyring {
 		// Best effort: without the OS keyring key the backed-up ciphertext is
 		// undecryptable once the keyring entry changes.
-		if key, err := readSystemKeyringKey(); err == nil {
+		if key, err := snapshotSystemKeyringKey(p.FactoryHome); err == nil {
 			if err := writeSavedKeyringKey(backupDir, key); err != nil {
 				return "", err
 			}
@@ -424,7 +433,7 @@ func SyncCurrentAuthToSavedAccount(p Paths, stdout io.Writer) error {
 		return err
 	}
 	if liveFormat == authFormatKeyring {
-		key, err := readSystemKeyringKey()
+		key, err := snapshotSystemKeyringKey(src)
 		if err != nil {
 			return fmt.Errorf("snapshot Droid keyring key: %w", err)
 		}

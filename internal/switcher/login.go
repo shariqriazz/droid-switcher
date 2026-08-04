@@ -50,8 +50,11 @@ func Login(p Paths, name, droidPath, label string, force bool, stdout io.Writer)
 	}
 	if format == authFormatKeyring {
 		// Droid 0.186+ stores credentials in keyring-v2 with the AES key in the
-		// OS keyring; snapshot that key so the account stays portable.
-		key, err := readSystemKeyringKey()
+		// OS keyring; snapshot the key that actually decrypts the fresh
+		// credentials so the account stays portable. Droid may have stored a
+		// brand-new key next to a stale one, so the snapshot is verified
+		// against the ciphertext instead of trusting a plain lookup.
+		key, err := snapshotSystemKeyringKey(accountHome)
 		if err != nil {
 			return fmt.Errorf("snapshot Droid keyring key after login: %w", err)
 		}
