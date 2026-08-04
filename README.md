@@ -142,10 +142,19 @@ droid-switcher switch
 droid-switcher select
 ```
 
-Only these files are swapped into the real `~/.factory`:
+Both Droid credential storage formats are supported, and only the files of the
+account's own format are swapped into the real `~/.factory`:
 
-- `auth.v2.file`
-- `auth.v2.key`
+- keyfile-v2: `auth.v2.file` + `auth.v2.key`
+- keyring-v2 (Droid 0.186+ default): `auth.v2.keyring`, plus a switcher-owned
+  snapshot of the OS keyring encryption key (`auth.v2.keyring.key`, stored only
+  in the saved account home)
+
+Switching to a keyring account writes that account's encryption key back into
+the OS keyring (service `Factory CLI`, account `auth-encryption-key`) via
+libsecret's `secret-tool`, and files of the other format are moved into the
+backup directory so Droid cannot pick up a stale login. Keyring support
+therefore requires `secret-tool` (package `libsecret`) on Linux.
 
 Current auth is backed up before replacement when valid auth already exists.
 Before switching away from an active saved account, the switcher also syncs the
@@ -161,11 +170,17 @@ drsw q -a -r
 ```
 
 Quota uses Factory's limits API with each saved Droid login and summarizes the
-same operator-facing windows as `/limits`:
+same operator-facing windows as `/limits` for every billing group the API
+reports (`standard`, `core` / Factory Core, and any future groups):
 
 - `5h`
 - `1wk`
 - `1month`
+
+Windows whose reset time has already passed are shown as
+`idle (last window: N% used)` instead of presenting the expired window's usage
+as current; the API keeps reporting the last consumed window until fresh usage
+opens a new one. A positive extra-usage balance is shown as a dollar amount.
 
 Use `--raw`/`-r` if Factory changes the limits response and you want to inspect
 the original API output.
@@ -222,7 +237,7 @@ keeps Go tooling and GitHub Actions updates visible as reviewable pull requests.
 
 ## Local Files
 
-- Active Droid auth: `~/.factory/auth.v2.file` and `~/.factory/auth.v2.key`
+- Active Droid auth: `***********************` and `~/.factory/auth.v2.key` (keyfile), or `~/.factory/auth.v2.keyring` (keyring)
 - Saved accounts: `~/.droid-switcher/accounts/<name>/.factory`
 - Account labels: `~/.droid-switcher/accounts/<name>/account.json`
 - Default account: `~/.droid-switcher/default`

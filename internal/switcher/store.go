@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -35,7 +36,8 @@ func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error
 	if generated {
 		fmt.Fprintf(stdout, "No account name provided. Using generated name: %s\n", name)
 	}
-	if err := EnsureAuth(p.FactoryHome); err != nil {
+	format, err := requireAuthFormat(p.FactoryHome)
+	if err != nil {
 		return fmt.Errorf("current Factory home is not logged in: %w", err)
 	}
 	dst := p.AccountFactoryHome(name)
@@ -55,7 +57,19 @@ func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error
 	if err := os.MkdirAll(dst, 0o700); err != nil {
 		return err
 	}
-	if err := copyDirFiles(p.FactoryHome, dst, 0o600, authFiles); err != nil {
+	if err := copyDirFiles(p.FactoryHome, dst, 0o600, authFilesForFormat(format)); err != nil {
+		return err
+	}
+	if format == authFormatKeyring {
+		key, err := readSystemKeyringKey()
+		if err != nil {
+			return fmt.Errorf("snapshot Droid keyring key: %w", err)
+		}
+		if err := writeSavedKeyringKey(dst, key); err != nil {
+			return err
+		}
+	}
+	if err := pruneOtherFormatAuth(dst, format); err != nil {
 		return err
 	}
 	label := strings.TrimSpace(opts.Label)
@@ -75,7 +89,7 @@ func SwitchAccount(p Paths, name string, stdout io.Writer) error {
 		return err
 	}
 	src := p.AccountFactoryHome(name)
-	if err := EnsureAuth(src); err != nil {
+	if err := EnsureSavedAuth(src); err != nil {
 		return fmt.Errorf("saved account %q is not usable: %w", name, err)
 	}
 	if err := SyncCurrentAuthToSavedAccount(p, io.Discard); err != nil {
@@ -86,18 +100,60 @@ func SwitchAccount(p Paths, name string, stdout io.Writer) error {
 
 func activateSavedAccount(p Paths, name string, stdout io.Writer) error {
 	src := p.AccountFactoryHome(name)
+	format, err := requireAuthFormat(src)
+	if err != nil {
+		return fmt.Errorf("saved account %q is not usable: %w", name, err)
+	}
 	if err := os.MkdirAll(p.FactoryHome, 0o700); err != nil {
 		return err
 	}
-	if err := BackupCurrentAuth(p); err != nil {
+	backupDir, err := BackupCurrentAuth(p)
+	if err != nil {
 		return err
 	}
-	for _, file := range authFiles {
+	for _, file := range authFilesForFormat(format) {
 		if err := atomicCopy(filepath.Join(src, file), filepath.Join(p.FactoryHome, file), 0o600); err != nil {
 			return err
 		}
 	}
+	if format == authFormatKeyring {
+		key, err := readSavedKeyringKey(src)
+		if err != nil {
+			return err
+		}
+		if err := writeSystemKeyringKey(key); err != nil {
+			return err
+		}
+	}
+	if err := displaceOtherFormatAuth(p.FactoryHome, format, backupDir); err != nil {
+		return err
+	}
 	return writeActive(p, name, stdout)
+}
+
+// displaceOtherFormatAuth moves auth files of the other storage backend out of
+// the live Factory home so Droid cannot load a stale login from them.
+func displaceOtherFormatAuth(factoryHome string, keep authFormat, backupDir string) error {
+	keepFiles := authFilesForFormat(keep)
+	for _, name := range allDroidAuthFileNames {
+		if slices.Contains(keepFiles, name) {
+			continue
+		}
+		live := filepath.Join(factoryHome, name)
+		if _, err := os.Stat(live); err != nil {
+			continue
+		}
+		if backupDir != "" {
+			if err := os.Rename(live, filepath.Join(backupDir, name)); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := removeFileIfExists(live); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListAccounts returns saved accounts sorted by stable id.
@@ -128,7 +184,7 @@ func ListAccounts(p Paths) ([]AccountStatus, error) {
 			Label:   meta.Label,
 			Active:  name == activeName,
 			Default: name == defaultName,
-			Ready:   EnsureAuth(p.AccountFactoryHome(name)) == nil,
+			Ready:   EnsureSavedAuth(p.AccountFactoryHome(name)) == nil,
 		})
 	}
 	sort.Slice(accounts, func(i, j int) bool {
@@ -259,16 +315,22 @@ func ClearDefaultAccount(p Paths, stdout io.Writer) error {
 	return nil
 }
 
-// EnsureAuth verifies that both required Droid auth files are non-empty.
+// EnsureAuth verifies that a Factory home holds a complete Droid auth set in
+// either storage format (keyring-v2 or keyfile-v2).
 func EnsureAuth(factoryHome string) error {
-	for _, file := range authFiles {
-		info, err := os.Stat(filepath.Join(factoryHome, file))
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || info.Size() == 0 {
-			return fmt.Errorf("%s is empty or not a file", file)
-		}
+	_, err := requireAuthFormat(factoryHome)
+	return err
+}
+
+// EnsureSavedAuth verifies a saved account home is fully usable. Keyring-format
+// accounts additionally need the switcher-owned snapshot of the OS keyring key.
+func EnsureSavedAuth(factoryHome string) error {
+	format, err := requireAuthFormat(factoryHome)
+	if err != nil {
+		return err
+	}
+	if format == authFormatKeyring && !nonEmptyFile(filepath.Join(factoryHome, authKeyringKeyFileName)) {
+		return fmt.Errorf("%s exists but %s is missing; re-save with droid-switcher save --force", authKeyringFileName, authKeyringKeyFileName)
 	}
 	return nil
 }
@@ -286,16 +348,30 @@ func SeedNonAuthFactoryFiles(srcFactoryHome, dstFactoryHome string) error {
 	return nil
 }
 
-// BackupCurrentAuth snapshots valid live auth before it is replaced.
-func BackupCurrentAuth(p Paths) error {
-	if EnsureAuth(p.FactoryHome) != nil {
-		return nil
+// BackupCurrentAuth snapshots any live auth before it is replaced and returns
+// the backup directory (empty when there was nothing to back up).
+func BackupCurrentAuth(p Paths) (string, error) {
+	format := detectAuthFormat(p.FactoryHome)
+	if format == authFormatNone {
+		return "", nil
 	}
 	backupDir := filepath.Join(p.Store, "backups", fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), randomSuffix()[:6]))
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {
-		return err
+		return "", err
 	}
-	return copyDirFiles(p.FactoryHome, backupDir, 0o600, authFiles)
+	if err := copyDirFiles(p.FactoryHome, backupDir, 0o600, authFilesForFormat(format)); err != nil {
+		return "", err
+	}
+	if format == authFormatKeyring {
+		// Best effort: without the OS keyring key the backed-up ciphertext is
+		// undecryptable once the keyring entry changes.
+		if key, err := readSystemKeyringKey(); err == nil {
+			if err := writeSavedKeyringKey(backupDir, key); err != nil {
+				return "", err
+			}
+		}
+	}
+	return backupDir, nil
 }
 
 func writeActive(p Paths, name string, stdout io.Writer) error {
@@ -320,27 +396,43 @@ func SyncCurrentAuthToSavedAccount(p Paths, stdout io.Writer) error {
 	}
 	src := p.FactoryHome
 	dst := p.AccountFactoryHome(active)
-	if err := EnsureAuth(src); err != nil {
+	liveFormat := detectAuthFormat(src)
+	if liveFormat == authFormatNone {
 		return nil
 	}
-	if err := EnsureAuth(dst); err != nil {
+	savedFormat := detectAuthFormat(dst)
+	if savedFormat == authFormatNone {
 		return nil
 	}
-	changed := false
-	for _, file := range authFiles {
-		same, err := sameContent(filepath.Join(src, file), filepath.Join(dst, file))
-		if err != nil {
-			return err
-		}
-		if !same {
-			changed = true
-			break
+	changed := savedFormat != liveFormat
+	if !changed {
+		for _, file := range authFilesForFormat(liveFormat) {
+			same, err := sameContent(filepath.Join(src, file), filepath.Join(dst, file))
+			if err != nil {
+				return err
+			}
+			if !same {
+				changed = true
+				break
+			}
 		}
 	}
 	if !changed {
 		return nil
 	}
-	if err := copyDirFiles(src, dst, 0o600, authFiles); err != nil {
+	if err := copyDirFiles(src, dst, 0o600, authFilesForFormat(liveFormat)); err != nil {
+		return err
+	}
+	if liveFormat == authFormatKeyring {
+		key, err := readSystemKeyringKey()
+		if err != nil {
+			return fmt.Errorf("snapshot Droid keyring key: %w", err)
+		}
+		if err := writeSavedKeyringKey(dst, key); err != nil {
+			return err
+		}
+	}
+	if err := pruneOtherFormatAuth(dst, liveFormat); err != nil {
 		return err
 	}
 	if stdout != nil {

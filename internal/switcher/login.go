@@ -44,8 +44,23 @@ func Login(p Paths, name, droidPath, label string, force bool, stdout io.Writer)
 	if err := runDroid(NewDroidRunner(droidPath), accountHome); err != nil {
 		return err
 	}
-	if err := EnsureAuth(accountHome); err != nil {
+	format, err := requireAuthFormat(accountHome)
+	if err != nil {
 		return fmt.Errorf("login did not create Droid auth files for %q: %w", name, err)
+	}
+	if format == authFormatKeyring {
+		// Droid 0.186+ stores credentials in keyring-v2 with the AES key in the
+		// OS keyring; snapshot that key so the account stays portable.
+		key, err := readSystemKeyringKey()
+		if err != nil {
+			return fmt.Errorf("snapshot Droid keyring key after login: %w", err)
+		}
+		if err := writeSavedKeyringKey(accountHome, key); err != nil {
+			return err
+		}
+	}
+	if err := pruneOtherFormatAuth(accountHome, format); err != nil {
+		return err
 	}
 	if strings.TrimSpace(label) == "" && exists {
 		label = existingMeta.Label

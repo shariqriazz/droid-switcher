@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -148,8 +149,62 @@ func TestQuotaFetchesFactoryLimitsForActiveAccount(t *testing.T) {
 	if !strings.Contains(out.String(), "Work Label (work)") {
 		t.Fatalf("expected label in quota output, got %q", out.String())
 	}
+	if !strings.Contains(out.String(), "standard") {
+		t.Fatalf("expected standard group header, got %q", out.String())
+	}
 	if !strings.Contains(out.String(), "5h     10% used, resets in 1h") {
 		t.Fatalf("expected formatted quota output, got %q", out.String())
+	}
+}
+
+func TestQuotaDisplaysCoreGroupIdleWindowsAndExtraBalance(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeEncryptedAuth(t, p.AccountFactoryHome("work"), droidCredentials{
+		AccessToken:  testJWT(time.Now().Add(time.Hour)),
+		RefreshToken: "refresh-token",
+	})
+
+	withQuotaServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/billing/limits" {
+			t.Fatalf("path = %q, want /api/billing/limits", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"usesTokenRateLimitsBilling": true,
+			"limits": {
+				"standard": {
+					"fiveHour": {"usedPercent": 10, "secondsRemaining": 3600},
+					"weekly": {"usedPercent": 20, "secondsRemaining": 7200},
+					"monthly": {"usedPercent": 30, "secondsRemaining": 10800}
+				},
+				"core": {
+					"fiveHour": {"usedPercent": 17, "windowEnd": "2026-07-04T20:59:01.705Z", "secondsRemaining": null},
+					"weekly": {"usedPercent": 12, "windowEnd": "2026-07-06T15:42:26.575Z", "secondsRemaining": null},
+					"monthly": {"usedPercent": 4, "windowEnd": "2026-08-03T15:59:01.705Z", "secondsRemaining": null}
+				}
+			},
+			"extraUsageAllowed": true,
+			"extraUsageBalanceCents": 1234,
+			"overagePreference": "droidCore"
+		}`))
+	}))
+
+	var out bytes.Buffer
+	if err := Quota(p, QuotaOptions{Account: "work"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"standard",
+		"core",
+		"10% used, resets in 1h",
+		"idle (last window: 17% used)",
+		"idle (last window: 12% used)",
+		"idle (last window: 4% used)",
+		"extra usage balance: $12.34",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("expected %q in quota output, got %q", want, out.String())
+		}
 	}
 }
 
@@ -244,8 +299,8 @@ func TestQuotaRefreshesExpiredAccessToken(t *testing.T) {
 			if got := r.Form.Get("refresh_token"); got != "old-refresh" {
 				t.Fatalf("refresh token = %q, want old-refresh", got)
 			}
-			if got := r.Form.Get("organization_id"); got != "org-work" {
-				t.Fatalf("organization id = %q, want org-work", got)
+			if got := r.Form.Get("organization_id"); got != "" {
+				t.Fatalf("organization id = %q, want empty (Droid omits it on routine refresh)", got)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"access_token":` + strconv.Quote(newAccess) + `,"refresh_token":"new-refresh"}`))
@@ -545,6 +600,143 @@ func TestSyncCurrentAuthToSavedAccount(t *testing.T) {
 	}
 }
 
+func TestSaveCurrentKeyringFormat(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
+	writeLiveKeyringAuth(t, p.FactoryHome, "live-keyring-cipher")
+	stubSystemKeyring(t, key)
+
+	var out bytes.Buffer
+	if err := SaveCurrent(p, "work", SaveOptions{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringFileName), "live-keyring-cipher")
+	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringKeyFileName), base64.StdEncoding.EncodeToString(key))
+	if err := EnsureSavedAuth(p.AccountFactoryHome("work")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(p.AccountFactoryHome("work"), authFileName)); !os.IsNotExist(err) {
+		t.Fatal("expected no keyfile credentials in a keyring-format saved account")
+	}
+}
+
+func TestSwitchAccountKeyringRestoresSystemKey(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
+	writeKeyringAuth(t, p.AccountFactoryHome("work"), "work-keyring-cipher", key)
+	writeAuth(t, p.FactoryHome, "live-file", "live-key")
+	written := stubSystemKeyring(t, nil)
+
+	var out bytes.Buffer
+	if err := SwitchAccount(p, "work", &out); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(p.FactoryHome, authKeyringFileName), "work-keyring-cipher")
+	if !bytes.Equal(*written, key) {
+		t.Fatal("expected the saved keyring key to be written to the OS keyring")
+	}
+	if _, err := os.Stat(filepath.Join(p.FactoryHome, authFileName)); !os.IsNotExist(err) {
+		t.Fatal("expected stale keyfile auth displaced from the live home")
+	}
+	backups, err := filepath.Glob(filepath.Join(p.Store, "backups", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("expected one backup directory, got %d", len(backups))
+	}
+	assertFile(t, filepath.Join(backups[0], authFileName), "live-file")
+}
+
+func TestSwitchAccountKeyfileDisplacesKeyring(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
+	writeLiveKeyringAuth(t, p.FactoryHome, "live-keyring-cipher")
+	writeAuth(t, p.AccountFactoryHome("plain"), "plain-file", "plain-key")
+	stubSystemKeyring(t, key)
+
+	var out bytes.Buffer
+	if err := SwitchAccount(p, "plain", &out); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(p.FactoryHome, authFileName), "plain-file")
+	assertFile(t, filepath.Join(p.FactoryHome, authKeyFileName), "plain-key")
+	if _, err := os.Stat(filepath.Join(p.FactoryHome, authKeyringFileName)); !os.IsNotExist(err) {
+		t.Fatal("expected keyring auth displaced from the live home")
+	}
+	backups, err := filepath.Glob(filepath.Join(p.Store, "backups", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("expected one backup directory, got %d", len(backups))
+	}
+	assertFile(t, filepath.Join(backups[0], authKeyringFileName), "live-keyring-cipher")
+	assertFile(t, filepath.Join(backups[0], authKeyringKeyFileName), base64.StdEncoding.EncodeToString(key))
+}
+
+func TestSyncCurrentAuthConvertsSavedAccountFormat(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
+	writeAuth(t, p.AccountFactoryHome("work"), "old-file", "old-key")
+	writeLiveKeyringAuth(t, p.FactoryHome, "live-keyring-cipher")
+	if err := atomicWriteFile(p.ActiveFile, []byte("work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubSystemKeyring(t, key)
+
+	var out bytes.Buffer
+	if err := SyncCurrentAuthToSavedAccount(p, &out); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringFileName), "live-keyring-cipher")
+	assertFile(t, filepath.Join(p.AccountFactoryHome("work"), authKeyringKeyFileName), base64.StdEncoding.EncodeToString(key))
+	if _, err := os.Stat(filepath.Join(p.AccountFactoryHome("work"), authFileName)); !os.IsNotExist(err) {
+		t.Fatal("expected stale keyfile auth removed from the saved account")
+	}
+	if !strings.Contains(out.String(), "Synced current auth") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestEnsureSavedAuthRequiresKeyringKeySnapshot(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	home := p.AccountFactoryHome("work")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, authKeyringFileName), []byte("cipher"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := EnsureSavedAuth(home)
+	if err == nil || !strings.Contains(err.Error(), authKeyringKeyFileName) {
+		t.Fatalf("expected missing key snapshot error, got %v", err)
+	}
+}
+
+func TestQuotaLoadsKeyringFormatAccount(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeEncryptedKeyringAuth(t, p.AccountFactoryHome("work"), droidCredentials{
+		AccessToken:  testJWT(time.Now().Add(time.Hour)),
+		RefreshToken: "refresh-token",
+	})
+	withQuotaServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/billing/limits" {
+			t.Fatalf("path = %q, want /api/billing/limits", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usesTokenRateLimitsBilling":true,"limits":{"standard":{"fiveHour":{"usedPercent":5},"weekly":{"usedPercent":6},"monthly":{"usedPercent":7}}}}`))
+	}))
+
+	var out bytes.Buffer
+	if err := Quota(p, QuotaOptions{Account: "work"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "5% used") {
+		t.Fatalf("expected quota output for keyring account, got %q", out.String())
+	}
+}
+
 func TestRemoveAccountMissingErrors(t *testing.T) {
 	err := RemoveAccount(NewPaths(t.TempDir()), "ghost", &bytes.Buffer{})
 	if err == nil {
@@ -696,6 +888,62 @@ func writeEncryptedAuth(t *testing.T, factoryHome string, creds droidCredentials
 	if err := os.WriteFile(filepath.Join(factoryHome, authKeyFileName), []byte(base64.StdEncoding.EncodeToString(key)), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// writeKeyringAuth creates a saved-account home in keyring-v2 format: the
+// Droid credentials file plus the switcher-owned key snapshot.
+func writeKeyringAuth(t *testing.T, factoryHome, content string, key []byte) {
+	t.Helper()
+	writeLiveKeyringAuth(t, factoryHome, content)
+	if err := os.WriteFile(filepath.Join(factoryHome, authKeyringKeyFileName), []byte(base64.StdEncoding.EncodeToString(key)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeLiveKeyringAuth creates only the Droid-owned keyring file, matching a
+// real Factory home where the key stays in the OS keyring.
+func writeLiveKeyringAuth(t *testing.T, factoryHome, content string) {
+	t.Helper()
+	if err := os.MkdirAll(factoryHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(factoryHome, authKeyringFileName), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeEncryptedKeyringAuth(t *testing.T, factoryHome string, creds droidCredentials) {
+	t.Helper()
+	key := bytes.Repeat([]byte{9}, droidAuthKeySize)
+	encrypted, err := encryptDroidCredentials(creds, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeKeyringAuth(t, factoryHome, encrypted, key)
+}
+
+// stubSystemKeyring replaces the OS secret store with an in-memory copy and
+// returns a pointer to whatever was last written to it.
+func stubSystemKeyring(t *testing.T, stored []byte) *[]byte {
+	t.Helper()
+	var written []byte
+	oldRead, oldWrite := readSystemKeyringKey, writeSystemKeyringKey
+	readSystemKeyringKey = func() ([]byte, error) {
+		if stored == nil {
+			return nil, errors.New("OS keyring has no Droid key")
+		}
+		return stored, nil
+	}
+	writeSystemKeyringKey = func(key []byte) error {
+		written = key
+		stored = key
+		return nil
+	}
+	t.Cleanup(func() {
+		readSystemKeyringKey = oldRead
+		writeSystemKeyringKey = oldWrite
+	})
+	return &written
 }
 
 func testJWT(exp time.Time) string {

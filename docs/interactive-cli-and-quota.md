@@ -1,6 +1,6 @@
 # Interactive CLI and Quota
 
-Last verified: 2026-07-24
+Last verified: 2026-08-04
 
 ## Purpose
 
@@ -14,7 +14,7 @@ This subsystem turns the switcher from a raw file-management tool into an operat
 | `internal/switcher/ui.go` | No-argument menu with guided flows for common tasks |
 | `internal/switcher/interactive.go` | Number-based account picker used by `select` and bare `switch` |
 | `internal/switcher/quota.go` | Resolves target accounts and renders quota summaries |
-| `internal/switcher/auth.go` | Reads and rewrites Droid's encrypted `auth.v2.file` / `auth.v2.key` pair |
+| `internal/switcher/auth.go` | Reads and rewrites Droid's encrypted credentials in either storage format (keyfile-v2 or keyring-v2) |
 | `internal/switcher/factory_limits.go` | Refreshes expired saved tokens, calls Factory limits, and maps the `5h`, `1wk`, and `1month` windows |
 | `internal/switcher/display.go` | Builds user-facing account display strings from labels and ids |
 | `internal/switcher/store.go` | Supplies account state that drives menu badges and fallback behavior |
@@ -55,14 +55,16 @@ If multiple saved accounts share the same label, label-based selection is reject
 
 Once an account is selected, the switcher:
 
-1. Reads that account's encrypted Droid auth from `auth.v2.file` and `auth.v2.key`.
-2. Refreshes an expired WorkOS access token with the saved refresh token and active organization id.
+1. Reads that account's encrypted Droid auth (`auth.v2.file` + `auth.v2.key` for keyfile accounts, or `auth.v2.keyring` + the switcher-owned `auth.v2.keyring.key` snapshot for keyring accounts).
+2. Refreshes an expired WorkOS access token with the saved refresh token. Like current Droid, the refresh omits `organization_id`; the stored active organization id is only sent as the `X-Factory-Org-Id` header on the limits call.
 3. Calls `GET /api/billing/limits` with Droid-compatible Factory headers.
-4. Summarizes three `standard` billing windows:
+4. Summarizes every billing group the API reports (`standard`, `core` / Factory Core, and any future groups), each into three windows:
 
 - `5h`
 - `1wk`
 - `1month`
+
+Windows whose reset time has already passed render as `idle (last window: N% used)` because the API keeps reporting the last consumed window until fresh usage opens a new one. A positive extra-usage balance is rendered as a dollar amount under the groups.
 
 If Factory changes the response format, `--raw` exposes the original JSON API output.
 

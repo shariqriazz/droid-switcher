@@ -1,6 +1,6 @@
 # Account Lifecycle
 
-Last verified: 2026-07-24
+Last verified: 2026-08-04
 
 ## Purpose
 
@@ -27,8 +27,8 @@ This subsystem manages the full lifecycle of a saved Droid account: naming, logi
 3. The account gets its own isolated Factory home under `~/.droid-switcher/accounts/<name>/.factory`.
 4. Non-auth config files such as `settings.json`, `settings-server.json`, and `mcp.json` are copied into that isolated home.
 5. `droid` is launched with `FACTORY_HOME_OVERRIDE=<account-root>`, where `<account-root>` is `~/.droid-switcher/accounts/<name>`. Current Droid creates OAuth state in `<account-root>/.factory`.
-6. After Droid exits, the switcher validates that `auth.v2.file` and `auth.v2.key` exist.
-7. The live `~/.factory` auth is backed up, the newly authenticated pair is copied into place, and the account is marked active.
+6. After Droid exits, the switcher validates the resulting auth set. Droid 0.186+ defaults to keyring-v2 (`auth.v2.keyring` with the AES key in the OS keyring); older or keyring-disabled builds produce keyfile-v2 (`auth.v2.file` + `auth.v2.key`). For keyring logins the switcher snapshots the OS keyring key into the account home as `auth.v2.keyring.key` so the account stays portable, and stale files of the other format are pruned.
+7. The live `~/.factory` auth is backed up, the newly authenticated auth set is copied into place (restoring the OS keyring key for keyring accounts), and the account is marked active.
 
 Before starting the isolated login, the switcher syncs the previous active
 account from live auth. This ordering prevents a later quota or switch command
@@ -46,18 +46,20 @@ If `--force` is used without a new `--label`, the existing saved label is preser
 
 - the active account marker exists
 - both the live and saved auth files are structurally valid
-- the saved and live auth contents differ
+- the saved and live auth contents differ, or the storage formats differ
 
-This exists because normal Droid usage can refresh tokens inside the real `~/.factory`, which would otherwise leave the saved copy stale.
+This exists because normal Droid usage can refresh tokens inside the real `~/.factory`, which would otherwise leave the saved copy stale. When the live home changed storage format (for example a plain Droid re-login landing on keyring-v2), the saved account is converted to the live format, including a fresh keyring key snapshot.
 
 ### Switching accounts
 
-`internal/switcher/store.go::SwitchAccount` copies only these files into `~/.factory`:
+`internal/switcher/store.go::SwitchAccount` copies only the files of the account's own storage format into `~/.factory`:
 
-- `auth.v2.file`
-- `auth.v2.key`
+- keyfile-v2: `auth.v2.file` and `auth.v2.key`
+- keyring-v2: `auth.v2.keyring`, and the account's key snapshot is written back into the OS keyring so Droid can decrypt it
 
-Before the switch, the tool attempts to sync the current live auth back into the active saved account. If the current real `~/.factory` already contains valid auth, it is also copied into `~/.droid-switcher/backups/<timestamp>-<suffix>/`.
+Files belonging to the other format are moved into the backup directory so Droid never loads a stale login from the wrong backend.
+
+Before the switch, the tool attempts to sync the current live auth back into the active saved account. If the current real `~/.factory` already contains valid auth, it is also copied into `~/.droid-switcher/backups/<timestamp>-<suffix>/` (with a best-effort keyring key snapshot for keyring-format auth).
 
 ### Metadata and identity
 
@@ -77,7 +79,9 @@ Before the switch, the tool attempts to sync the current live auth back into the
 
 ## Gotchas
 
-- `internal/switcher/store.go` only switches the two auth files. If a future change requires more state to move, the docs and constants must change together.
+- `internal/switcher/store.go` only switches the auth files of the account's own format plus the OS keyring key restore. If a future change requires more state to move, the docs and constants must change together.
+- Keyring support shells out to libsecret's `secret-tool` because Droid's keytar backend stores the AES key under service `Factory CLI`, account `auth-encryption-key` in the OS secret store. Without `secret-tool`, keyring-format accounts cannot be saved or activated.
+- The switcher-owned `auth.v2.keyring.key` snapshot only ever lives in saved account homes and backups, never in the real `~/.factory`.
 - `internal/switcher/droid.go` normalizes saved `.factory` paths before setting `FACTORY_HOME_OVERRIDE`; passing the `.factory` directory itself makes current Droid look under `.factory/.factory`.
 - `internal/switcher/login.go` seeds some config files into the isolated Factory home before launching Droid. Removing that seeding would make some account homes feel less like the real Droid environment.
 - `internal/switcher/metadata.go` stores labels outside the `.factory` directory, so tooling that copies only `.factory` will not preserve friendly labels.

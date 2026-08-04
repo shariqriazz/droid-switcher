@@ -64,9 +64,18 @@ func Quota(p Paths, opts QuotaOptions, stdout io.Writer) error {
 }
 
 type quotaReport struct {
-	Account string
-	Label   string
-	Raw     string
+	Account                string
+	Label                  string
+	Raw                    string
+	Groups                 []limitGroupReport
+	ExtraUsageAllowed      bool
+	ExtraUsageBalanceCents int
+}
+
+// limitGroupReport is one Factory billing pool (standard, core, ...) summarized
+// into the 5h, 1wk, and 1month windows.
+type limitGroupReport struct {
+	Name    string
 	Windows []LimitWindow
 }
 
@@ -114,7 +123,7 @@ func printQuotaReport(stdout io.Writer, report quotaReport, raw bool) {
 	} else {
 		fmt.Fprintf(stdout, "%s (%s)\n", report.Label, report.Account)
 	}
-	if len(report.Windows) == 0 {
+	if len(report.Groups) == 0 {
 		if report.Raw == "" {
 			fmt.Fprintln(stdout, "  no quota output returned")
 			return
@@ -122,13 +131,28 @@ func printQuotaReport(stdout io.Writer, report quotaReport, raw bool) {
 		printIndented(stdout, report.Raw)
 		return
 	}
-	for _, window := range report.Windows {
-		fmt.Fprintf(stdout, "  %-6s %s\n", window.Window, window.Text)
+	for _, group := range report.Groups {
+		fmt.Fprintf(stdout, "  %s\n", group.Name)
+		for _, window := range group.Windows {
+			fmt.Fprintf(stdout, "    %-6s %s\n", window.Window, window.Text)
+		}
+	}
+	if report.ExtraUsageAllowed && report.ExtraUsageBalanceCents > 0 {
+		fmt.Fprintf(stdout, "  extra usage balance: %s\n", formatCents(report.ExtraUsageBalanceCents))
 	}
 	if raw {
 		fmt.Fprintln(stdout, "  raw:")
 		printIndented(stdout, report.Raw)
 	}
+}
+
+func formatCents(cents int) string {
+	sign := ""
+	if cents < 0 {
+		sign = "-"
+		cents = -cents
+	}
+	return fmt.Sprintf("%s$%d.%02d", sign, cents/100, cents%100)
 }
 
 func printIndented(stdout io.Writer, text string) {

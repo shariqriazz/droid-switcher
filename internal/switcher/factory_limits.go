@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -23,7 +24,7 @@ const (
 	factoryOrgHeader           = "X-Factory-Org-Id"
 	droidWorkOSClientIDDev     = "client_01HNM7927XNSKCJ4982Z5J3FFZ"
 	droidWorkOSClientIDProd    = "client_01HNM792M5G5G1A2THWPXKFMXB"
-	droidClientVersionDefault  = "0.179.0"
+	droidClientVersionDefault  = "0.187.0"
 	tokenExpirySkew            = time.Minute
 	tokenRefreshAttempts       = 3
 )
@@ -64,7 +65,7 @@ func fetchQuotaReport(ctx context.Context, p Paths, accountName string) (quotaRe
 		return quotaReport{}, err
 	}
 	factoryHome := p.AccountFactoryHome(name)
-	if err := EnsureAuth(factoryHome); err != nil {
+	if err := EnsureSavedAuth(factoryHome); err != nil {
 		return quotaReport{}, fmt.Errorf("saved account %q is not usable: %w", name, err)
 	}
 	creds, err := loadDroidCredentials(factoryHome)
@@ -88,7 +89,7 @@ func fetchQuotaReport(ctx context.Context, p Paths, accountName string) (quotaRe
 		if active, ok, err := CurrentAccount(p); err != nil {
 			return quotaReport{}, err
 		} else if ok && active == name {
-			if err := copyDirFiles(factoryHome, p.FactoryHome, 0o600, authFiles); err != nil {
+			if err := copyDirFiles(factoryHome, p.FactoryHome, 0o600, authFilesForFormat(detectAuthFormat(factoryHome))); err != nil {
 				return quotaReport{}, fmt.Errorf("sync refreshed active auth to current Factory home: %w", err)
 			}
 		}
@@ -102,10 +103,12 @@ func fetchQuotaReport(ctx context.Context, p Paths, accountName string) (quotaRe
 		return quotaReport{}, err
 	}
 	return quotaReport{
-		Account: name,
-		Label:   meta.Label,
-		Raw:     prettyJSON(raw),
-		Windows: limitWindowsFromResponse(limits),
+		Account:                name,
+		Label:                  meta.Label,
+		Raw:                    prettyJSON(raw),
+		Groups:                 limitGroupsFromResponse(limits),
+		ExtraUsageAllowed:      limits.ExtraUsageAllowed,
+		ExtraUsageBalanceCents: limits.ExtraUsageBalanceCents,
 	}, nil
 }
 
@@ -119,7 +122,7 @@ func refreshDroidCredentialsIfNeeded(ctx context.Context, factoryHome string, cr
 	}
 	var lastErr error
 	for attempt := 1; attempt <= tokenRefreshAttempts; attempt++ {
-		next, err := refreshDroidCredentials(ctx, creds.RefreshToken, creds.ActiveOrganizationID)
+		next, err := refreshDroidCredentials(ctx, creds.RefreshToken)
 		if err == nil {
 			next.ActiveOrganizationID = creds.ActiveOrganizationID
 			if err := saveDroidCredentials(factoryHome, next); err != nil {
@@ -157,14 +160,13 @@ func (e tokenRefreshError) Unwrap() error {
 	return e.err
 }
 
-func refreshDroidCredentials(ctx context.Context, refreshToken, organizationID string) (droidCredentials, error) {
+func refreshDroidCredentials(ctx context.Context, refreshToken string) (droidCredentials, error) {
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", refreshToken)
 	form.Set("client_id", droidWorkOSClientID())
-	if organizationID != "" {
-		form.Set("organization_id", organizationID)
-	}
+	// Droid's routine refresh deliberately omits organization_id; sending a
+	// stale one makes WorkOS reject the refresh with organization_not_found.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(workOSBaseURL, "/authenticate"), strings.NewReader(form.Encode()))
 	if err != nil {
 		return droidCredentials{}, err
@@ -236,26 +238,48 @@ func getBillingLimits(ctx context.Context, creds droidCredentials) ([]byte, bill
 	return body, limits, nil
 }
 
-func limitWindowsFromResponse(resp billingLimitsResponse) []LimitWindow {
-	standard, ok := resp.Limits["standard"]
-	if !ok {
-		return nil
+// limitGroupsFromResponse summarizes every billing pool the API reports
+// (standard, core/Factory Core, and any future groups), standard first.
+func limitGroupsFromResponse(resp billingLimitsResponse) []limitGroupReport {
+	names := make([]string, 0, len(resp.Limits))
+	for name := range resp.Limits {
+		names = append(names, name)
 	}
-	return []LimitWindow{
-		{Window: "5h", Text: formatBillingWindow(standard.FiveHour)},
-		{Window: "1wk", Text: formatBillingWindow(standard.Weekly)},
-		{Window: "1month", Text: formatBillingWindow(standard.Monthly)},
+	sort.Slice(names, func(i, j int) bool {
+		if names[i] == "standard" {
+			return true
+		}
+		if names[j] == "standard" {
+			return false
+		}
+		return names[i] < names[j]
+	})
+	var groups []limitGroupReport
+	for _, name := range names {
+		group := resp.Limits[name]
+		groups = append(groups, limitGroupReport{
+			Name: name,
+			Windows: []LimitWindow{
+				{Window: "5h", Text: formatBillingWindow(group.FiveHour)},
+				{Window: "1wk", Text: formatBillingWindow(group.Weekly)},
+				{Window: "1month", Text: formatBillingWindow(group.Monthly)},
+			},
+		})
 	}
+	return groups
 }
 
 func formatBillingWindow(window billingLimitWindow) string {
-	parts := []string{formatPercent(window.UsedPercent) + " used"}
+	used := formatPercent(window.UsedPercent) + " used"
 	if window.SecondsRemaining > 0 {
-		parts = append(parts, "resets in "+formatDurationShort(time.Duration(window.SecondsRemaining)*time.Second))
-	} else if t, err := time.Parse(time.RFC3339, window.WindowEnd); err == nil && t.After(time.Now()) {
-		parts = append(parts, "resets in "+formatDurationShort(time.Until(t)))
+		return used + ", resets in " + formatDurationShort(time.Duration(window.SecondsRemaining)*time.Second)
 	}
-	return strings.Join(parts, ", ")
+	if t, err := time.Parse(time.RFC3339, window.WindowEnd); err == nil && t.After(time.Now()) {
+		return used + ", resets in " + formatDurationShort(time.Until(t))
+	}
+	// The API keeps reporting the last consumed window after it expires until
+	// fresh usage opens a new one; do not present stale usage as current.
+	return "idle (last window: " + used + ")"
 }
 
 func formatPercent(v float64) string {
@@ -332,5 +356,8 @@ func factoryClientType() string {
 }
 
 func droidClientVersion() string {
+	if v := strings.TrimSpace(os.Getenv("DROID_SWITCHER_CLIENT_VERSION")); v != "" {
+		return v
+	}
 	return droidClientVersionDefault
 }

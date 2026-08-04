@@ -1,6 +1,6 @@
 # Architecture
 
-Last verified: 2026-07-24
+Last verified: 2026-08-04
 
 ## Purpose
 
@@ -17,6 +17,7 @@ Last verified: 2026-07-24
 | `internal/switcher/login.go` | Droid-auth-backed login flow using isolated Factory homes |
 | `internal/switcher/droid.go` | Process runner that launches `droid` with `FACTORY_HOME_OVERRIDE` |
 | `internal/switcher/auth.go` | Droid encrypted-auth reader/writer used for quota token refresh |
+| `internal/switcher/keyring.go` | Auth storage format detection (keyfile-v2 vs keyring-v2) and OS keyring access via `secret-tool` |
 | `internal/switcher/factory_limits.go` | Factory limits API client and quota-window mapping |
 | `internal/switcher/quota.go` | Quota account resolution and report rendering |
 | `internal/switcher/metadata.go` | Label/default-account metadata persisted alongside saved accounts |
@@ -49,7 +50,7 @@ State is split into two layers:
 1. Per-account isolated Factory homes under `~/.droid-switcher/accounts/<name>/.factory`
 2. Small switcher-owned metadata files for active/default account markers, labels, and backups
 
-The `droid` binary remains the source of truth for authentication creation. The switcher stores Droid's encrypted auth files unchanged for switching, and quota reads those saved credentials only to refresh stale access tokens and call the same Factory limits backend used by Droid.
+The `droid` binary remains the source of truth for authentication creation. The switcher stores Droid's encrypted auth files unchanged for switching, and quota reads those saved credentials only to refresh stale access tokens and call the same Factory limits backend used by Droid. Both of Droid's credential backends are supported: keyfile-v2 (`auth.v2.file` + `auth.v2.key`) and keyring-v2 (`auth.v2.keyring`, the Droid 0.186+ default, whose AES key lives in the OS keyring). For keyring accounts the switcher snapshots that key into the saved account home and restores it into the OS keyring on activation.
 
 ## Decisions and Trade-offs
 
@@ -66,7 +67,7 @@ The `droid` binary remains the source of truth for authentication creation. The 
 - `internal/switcher/store.go` treats “active” and “default” as separate concepts. Changes that collapse them would alter quota and menu behavior.
 - `internal/switcher/store.go` also owns sync-back from live `~/.factory` into the active saved account. That behavior is part of the account-safety contract, not a convenience detail.
 - `internal/switcher/fileops.go` uses atomic writes for state files. Replacing those writes with direct writes would make interruptions riskier.
-- `internal/switcher/factory_limits.go` rewrites `auth.v2.file` only after a successful token refresh and preserves `active_organization_id`.
+- `internal/switcher/factory_limits.go` rewrites the account's credentials file (`auth.v2.file` or `auth.v2.keyring`, matching the account's format) only after a successful token refresh and preserves `active_organization_id`. Like current Droid, the WorkOS refresh deliberately omits `organization_id`; sending a stale one makes WorkOS reject the refresh with `organization_not_found`.
 - `--raw` is part of the quota contract when Factory's limits response changes.
 
 ## Related Docs

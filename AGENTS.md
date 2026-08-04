@@ -24,7 +24,7 @@ Go | standard library CLI and filesystem code | Droid CLI delegation
 ## Critical Patterns
 
 - The switcher must keep using Droid's own login flow rather than reimplementing auth. `internal/switcher/login.go` launches `droid` with `FACTORY_HOME_OVERRIDE` so OAuth state is created by Droid itself.
-- Account switching only replaces `auth.v2.file` and `auth.v2.key`; do not expand the swap surface without a concrete reason. That contract is encoded in `internal/switcher/constants.go` and applied in `internal/switcher/store.go`.
+- Account switching only replaces the auth files of the account's own Droid storage format: `auth.v2.file` + `auth.v2.key` (keyfile-v2) or `auth.v2.keyring` (keyring-v2, the Droid 0.186+ default). Keyring accounts also carry a switcher-owned OS-keyring key snapshot (`auth.v2.keyring.key`, saved account homes only) that is restored into the OS keyring via `secret-tool` on activation, and files of the other format are displaced into the backup directory. Do not expand the swap surface without a concrete reason. That contract is encoded in `internal/switcher/constants.go` and `internal/switcher/keyring.go`, and applied in `internal/switcher/store.go`.
 - Sync-back from the live `~/.factory` into the active saved account is part of the safety model now. Changes to switching logic must preserve `internal/switcher/store.go::SyncCurrentAuthToSavedAccount` behavior or replace it deliberately.
 - Quota is derived from Droid `/limits` output, then summarized into the `5h`, `1wk`, and `1month` windows. Any parsing change must stay resilient to formatting drift and preserve `--raw` as the fallback. See `internal/switcher/quota.go`.
 - Interactive UX is a core product surface here, not a bolt-on helper. Running with no args enters the numbered menu in `internal/switcher/ui.go`, and `select`/bare `switch` rely on `internal/switcher/interactive.go`.
@@ -32,7 +32,7 @@ Go | standard library CLI and filesystem code | Droid CLI delegation
 
 ## Modularization
 
-The CLI entry point in `main.go` should stay thin. Keep user-facing command routing in `internal/switcher/cli.go`, interactive flows in `internal/switcher/ui.go` and `internal/switcher/interactive.go`, persistent account state in `internal/switcher/store.go` and `internal/switcher/metadata.go`, and Droid-specific delegation in `internal/switcher/login.go`, `internal/switcher/droid.go`, and `internal/switcher/quota.go`.
+The CLI entry point in `main.go` should stay thin. Keep user-facing command routing in `internal/switcher/cli.go`, interactive flows in `internal/switcher/ui.go` and `internal/switcher/interactive.go`, persistent account state in `internal/switcher/store.go` and `internal/switcher/metadata.go`, and Droid-specific delegation in `internal/switcher/login.go`, `internal/switcher/droid.go`, `internal/switcher/keyring.go`, and `internal/switcher/quota.go`.
 
 ## Documentation
 

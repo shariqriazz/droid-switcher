@@ -26,12 +26,16 @@ type droidCredentials struct {
 }
 
 func loadDroidCredentials(factoryHome string) (droidCredentials, error) {
-	key, err := readDroidAuthKey(factoryHome)
+	format, err := requireAuthFormat(factoryHome)
+	if err != nil {
+		return droidCredentials{}, err
+	}
+	key, err := readDroidAuthKey(factoryHome, format)
 	if err != nil {
 		return droidCredentials{}, err
 	}
 	// factoryHome is always a switcher-owned or Factory-owned home, never raw user input.
-	encrypted, err := os.ReadFile(filepath.Join(factoryHome, authFileName)) //nolint:gosec // Path is scoped by validated account storage.
+	encrypted, err := os.ReadFile(filepath.Join(factoryHome, authCredentialsFileName(format))) //nolint:gosec // Path is scoped by validated account storage.
 	if err != nil {
 		return droidCredentials{}, err
 	}
@@ -54,7 +58,11 @@ func loadDroidCredentials(factoryHome string) (droidCredentials, error) {
 }
 
 func saveDroidCredentials(factoryHome string, creds droidCredentials) error {
-	key, err := readDroidAuthKey(factoryHome)
+	format, err := requireAuthFormat(factoryHome)
+	if err != nil {
+		return err
+	}
+	key, err := readDroidAuthKey(factoryHome, format)
 	if err != nil {
 		return err
 	}
@@ -62,12 +70,25 @@ func saveDroidCredentials(factoryHome string, creds droidCredentials) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteFile(filepath.Join(factoryHome, authFileName), []byte(encrypted), 0o600)
+	return atomicWriteFile(filepath.Join(factoryHome, authCredentialsFileName(format)), []byte(encrypted), 0o600)
 }
 
-func readDroidAuthKey(factoryHome string) ([]byte, error) {
+// authCredentialsFileName returns the encrypted credentials file for a format.
+func authCredentialsFileName(format authFormat) string {
+	if format == authFormatKeyring {
+		return authKeyringFileName
+	}
+	return authFileName
+}
+
+func readDroidAuthKey(factoryHome string, format authFormat) ([]byte, error) {
+	keyFileName := authKeyFileName
+	if format == authFormatKeyring {
+		// Saved accounts carry a switcher-owned snapshot of the OS keyring key.
+		keyFileName = authKeyringKeyFileName
+	}
 	// factoryHome is always a switcher-owned or Factory-owned home, never raw user input.
-	raw, err := os.ReadFile(filepath.Join(factoryHome, authKeyFileName)) //nolint:gosec // Path is scoped by validated account storage.
+	raw, err := os.ReadFile(filepath.Join(factoryHome, keyFileName)) //nolint:gosec // Path is scoped by validated account storage.
 	if err != nil {
 		return nil, err
 	}
