@@ -70,6 +70,7 @@ func RunMenu(c CLI) error {
 		"Rename account",
 		"Set account label",
 		"Remove account",
+		"Diagnose Droid keyring state",
 		"Show help",
 	})
 	if err != nil {
@@ -159,6 +160,8 @@ func RunMenu(c CLI) error {
 			return nil
 		}
 		return c.Run([]string{"droid-switcher", "remove", name})
+	case 9:
+		return c.Run([]string{"droid-switcher", "doctor"})
 	default:
 		PrintUsage(c.Stdout)
 		return nil

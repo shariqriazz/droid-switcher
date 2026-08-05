@@ -163,6 +163,23 @@ failure), every entry is tried and the one that actually decrypts wins.
 Activation rewrites the keyring to a single verified entry, so lookups can
 never return a key that does not match the active account.
 
+If Droid still asks for login after a switch, the keyring was most likely
+disturbed after activation: Droid generates and stores a fresh key whenever its
+own keyring read fails (a locked or flaky secret-service backend, e.g.
+ksecretd), leaving a duplicate entry that lookups may answer instead of the
+correct one. Diagnose and repair without re-logging in:
+
+```bash
+droid-switcher doctor          # report keyring entries vs. the live auth
+droid-switcher doctor --heal   # rewrite the keyring to the single working key
+```
+
+`doctor --heal` keeps the key that actually decrypts the live `~/.factory` and
+removes every other entry, so it can also recover the state after Droid
+generated a fresh key. It refuses to touch the keyring when no entry decrypts
+the live auth and prints the recovery path instead (usually
+`droid-switcher switch <account>` to restore from the verified saved copy).
+
 Current auth is backed up before replacement when valid auth already exists.
 Before switching away from an active saved account, the switcher also syncs the
 live auth back into that saved account when it detects changes.
@@ -218,6 +235,8 @@ droid-switcher list
 droid-switcher current
 droid-switcher rename old-name new-name
 droid-switcher sync-current
+droid-switcher doctor
+droid-switcher doctor --heal
 droid-switcher remove old-name
 droid-switcher remove old-name --yes
 droid-switcher where

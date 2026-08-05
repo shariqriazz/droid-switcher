@@ -74,14 +74,32 @@ var readAllSystemKeyringKeys = func() ([][]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list Droid encryption keys in OS keyring: %w", err)
 	}
+	keys := parseSecretToolSearchOutput(string(out))
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no Droid encryption key entries found in OS keyring")
+	}
+	return keys, nil
+}
+
+// parseSecretToolSearchOutput extracts Droid AES keys from secret-tool search
+// output. The command-line attribute filter already scoped the search, and
+// some backends (ksecretd) omit attribute lines from the output entirely, so
+// a block is only rejected when one of its attributes explicitly contradicts
+// the search. Blocks without a valid secret line contribute nothing.
+func parseSecretToolSearchOutput(out string) [][]byte {
 	var keys [][]byte
 	seen := map[string]bool{}
-	flush := func(block string) {
-		if !strings.Contains(block, "attribute.service = "+droidKeyringService) ||
-			!strings.Contains(block, "attribute.account = "+droidKeyringAccount()) {
+	var block strings.Builder
+	flush := func() {
+		defer block.Reset()
+		text := block.String()
+		if service, ok := searchOutputAttribute(text, "service"); ok && service != droidKeyringService {
 			return
 		}
-		for line := range strings.SplitSeq(block, "\n") {
+		if account, ok := searchOutputAttribute(text, "account"); ok && account != droidKeyringAccount() {
+			return
+		}
+		for line := range strings.SplitSeq(text, "\n") {
 			value, ok := strings.CutPrefix(strings.TrimSpace(line), "secret = ")
 			if !ok {
 				continue
@@ -97,19 +115,26 @@ var readAllSystemKeyringKeys = func() ([][]byte, error) {
 			return
 		}
 	}
-	var block strings.Builder
-	for line := range strings.SplitSeq(string(out), "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(line, "[/") {
-			flush(block.String())
-			block.Reset()
+			flush()
 		}
 		block.WriteString(line + "\n")
 	}
-	flush(block.String())
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("no Droid encryption key entries found in OS keyring")
+	flush()
+	return keys
+}
+
+// searchOutputAttribute reads one "attribute.<name> = <value>" line from a
+// secret-tool search result block.
+func searchOutputAttribute(block, name string) (string, bool) {
+	prefix := "attribute." + name + " = "
+	for line := range strings.SplitSeq(block, "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok {
+			return strings.TrimSpace(value), true
+		}
 	}
-	return keys, nil
+	return "", false
 }
 
 // writeSystemKeyringKey stores Droid's AES key in the OS secret store so the

@@ -140,6 +140,18 @@ func (c CLI) Run(args []string) error {
 			return errors.New("usage: droid-switcher sync-current")
 		}
 		return SyncCurrentAuthToSavedAccount(p, stdout)
+	case "doctor", "doc":
+		fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		heal := boolFlag(fs, "heal", "", false, "rewrite the OS keyring to the single key that decrypts the live home")
+		positionals, err := parseInterspersed(fs, args[2:])
+		if err != nil {
+			return err
+		}
+		if len(positionals) != 0 {
+			return errors.New("usage: droid-switcher doctor [--heal]")
+		}
+		return Doctor(p, DoctorOptions{Heal: *heal}, stdout)
 	case "list", "ls":
 		return printAccountList(p, stdout)
 	case "current", "cur":
@@ -301,6 +313,7 @@ func PrintUsage(w io.Writer) {
   droid-switcher login|add [account]          Run Droid's own OAuth flow in an isolated account home
   droid-switcher save-current|save|sc [acct]  Save the current ~/.factory auth as an account
   droid-switcher sync-current|sync            Sync the live ~/.factory auth back into the active saved account
+  droid-switcher doctor|doc [--heal]          Diagnose Droid OS keyring state; --heal rewrites it to the single working key
   droid-switcher switch|sw|s [account]        Make an account active for normal droid runs
   droid-switcher select|sel                   Pick a saved account interactively
   droid-switcher quota|limits|q [account]     Show Factory quota for a saved account

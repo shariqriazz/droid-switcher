@@ -842,6 +842,118 @@ func TestWriteSystemKeyringKeyClearsStaleEntriesAndVerifies(t *testing.T) {
 	}
 }
 
+func TestParseSecretToolSearchOutput(t *testing.T) {
+	keyA := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, droidAuthKeySize))
+	keyB := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, droidAuthKeySize))
+	tests := []struct {
+		name string
+		out  string
+		want int
+	}{
+		{"attributes present", "[/1]\nlabel = Factory CLI\nsecret = " + keyA + "\nattribute.account = auth-encryption-key\nattribute.service = Factory CLI\n", 1},
+		// ksecretd omits attribute lines from search output entirely; the
+		// command-line filter already scoped the search, so the block counts.
+		{"attributes omitted by backend", "[/1]\nlabel = Factory CLI\nsecret = " + keyA + "\ncreated = 2026-08-05 12:46:07\n", 1},
+		{"duplicates without attributes", "[/1]\nsecret = " + keyA + "\n[/2]\nsecret = " + keyB + "\n", 2},
+		{"contradicting account skipped", "[/1]\nsecret = " + keyA + "\nattribute.account = other\nattribute.service = Factory CLI\n", 0},
+		{"contradicting service skipped", "[/1]\nsecret = " + keyA + "\nattribute.account = auth-encryption-key\nattribute.service = Other\n", 0},
+		{"duplicate secrets deduped", "[/1]\nsecret = " + keyA + "\n[/2]\nsecret = " + keyA + "\n", 1},
+		{"invalid base64 skipped", "[/1]\nsecret = not-base64!!\n", 0},
+		{"wrong key length skipped", "[/1]\nsecret = " + base64.StdEncoding.EncodeToString([]byte{1, 2, 3}) + "\n", 0},
+		{"no secret line", "[/1]\nlabel = Factory CLI\n", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := len(parseSecretToolSearchOutput(tt.out)); got != tt.want {
+				t.Fatalf("keys = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDoctorReportsHealthyKeyring(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	key := bytes.Repeat([]byte{5}, droidAuthKeySize)
+	writeLiveEncryptedKeyringAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:  "live-access",
+		RefreshToken: "live-refresh",
+	}, key)
+	stubSystemKeyring(t, key)
+
+	var out bytes.Buffer
+	if err := Doctor(p, DoctorOptions{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Keyring state is healthy") {
+		t.Fatalf("expected healthy report, got %q", out.String())
+	}
+}
+
+func TestDoctorHealCollapsesDuplicateEntries(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	stale := bytes.Repeat([]byte{1}, droidAuthKeySize)
+	current := bytes.Repeat([]byte{7}, droidAuthKeySize)
+	writeLiveEncryptedKeyringAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:  "live-access",
+		RefreshToken: "live-refresh",
+	}, current)
+	// Droid generated a fresh key next to a stale one and plain lookups return
+	// the stale entry, so Droid starts with a decrypt failure and asks for login.
+	written := stubSystemKeyringEntries(t, [][]byte{stale, current})
+
+	var out bytes.Buffer
+	if err := Doctor(p, DoctorOptions{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "doctor --heal") {
+		t.Fatalf("expected heal guidance, got %q", out.String())
+	}
+
+	out.Reset()
+	if err := Doctor(p, DoctorOptions{Heal: true}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(*written, current) {
+		t.Fatal("expected the live home's key to be written to the OS keyring")
+	}
+	if !strings.Contains(out.String(), "Keyring healed") {
+		t.Fatalf("expected heal confirmation, got %q", out.String())
+	}
+}
+
+func TestDoctorHealRefusesWhenNoEntryDecrypts(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	stale := bytes.Repeat([]byte{1}, droidAuthKeySize)
+	current := bytes.Repeat([]byte{7}, droidAuthKeySize)
+	writeLiveEncryptedKeyringAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:  "live-access",
+		RefreshToken: "live-refresh",
+	}, current)
+	stubSystemKeyringEntries(t, [][]byte{stale})
+
+	var out bytes.Buffer
+	err := Doctor(p, DoctorOptions{Heal: true}, &out)
+	if err == nil || !strings.Contains(err.Error(), "no OS keyring entry decrypts") {
+		t.Fatalf("expected no-decrypting-entry error, got %v", err)
+	}
+	if !strings.Contains(out.String(), "Recovery:") {
+		t.Fatalf("expected recovery guidance, got %q", out.String())
+	}
+}
+
+func TestDoctorKeyfileFormatSkipsKeyring(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeAuth(t, p.FactoryHome, "live-file", "live-key")
+
+	var out bytes.Buffer
+	if err := Doctor(p, DoctorOptions{Heal: true}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "nothing to diagnose") {
+		t.Fatalf("expected keyfile skip, got %q", out.String())
+	}
+}
+
 func TestQuotaLoadsKeyringFormatAccount(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	writeEncryptedKeyringAuth(t, p.AccountFactoryHome("work"), droidCredentials{
@@ -1108,6 +1220,45 @@ func stubSystemKeyring(t *testing.T, stored []byte) *[]byte {
 	writeSystemKeyringKey = func(key []byte) error {
 		written = key
 		stored = key
+		return nil
+	}
+	t.Cleanup(func() {
+		readSystemKeyringKey = oldRead
+		writeSystemKeyringKey = oldWrite
+		readAllSystemKeyringKeys = oldReadAll
+		clearSystemKeyringKeys = oldClear
+	})
+	return &written
+}
+
+// stubSystemKeyringEntries replaces the OS secret store with an in-memory
+// multi-entry copy, mimicking a backend that keeps duplicate entries. Plain
+// lookups answer with the first entry. It returns a pointer to whatever was
+// last written to it.
+func stubSystemKeyringEntries(t *testing.T, entries [][]byte) *[]byte {
+	t.Helper()
+	var written []byte
+	oldRead, oldWrite := readSystemKeyringKey, writeSystemKeyringKey
+	oldReadAll, oldClear := readAllSystemKeyringKeys, clearSystemKeyringKeys
+	readSystemKeyringKey = func() ([]byte, error) {
+		if len(entries) == 0 {
+			return nil, errors.New("OS keyring has no Droid key")
+		}
+		return entries[0], nil
+	}
+	readAllSystemKeyringKeys = func() ([][]byte, error) {
+		if len(entries) == 0 {
+			return nil, errors.New("OS keyring has no Droid key")
+		}
+		return entries, nil
+	}
+	clearSystemKeyringKeys = func() error {
+		entries = nil
+		return nil
+	}
+	writeSystemKeyringKey = func(key []byte) error {
+		entries = [][]byte{key}
+		written = key
 		return nil
 	}
 	t.Cleanup(func() {
