@@ -338,10 +338,10 @@ Short flags:
   -y, --yes      Skip remove confirmation
 
 The switcher stores account homes under ~/.droid-switcher/accounts and only
-replaces Droid's auth files in ~/.factory when switching. Both Droid storage
-formats are supported: auth.v2.file/auth.v2.key (keyfile) and auth.v2.keyring
-(OS keyring). Keyring accounts need libsecret's secret-tool so the switcher can
-snapshot and restore Droid's encryption key.
+replaces Droid's auth files in ~/.factory when switching. Supported formats are
+auth.v2.file/auth.v2.key (keyfile), auth.v2.keyring (Linux Secret Service), and
+auth.v2.loginkeychain (macOS Login Keychain). Linux secure-storage accounts need
+libsecret's secret-tool; macOS uses the built-in /usr/bin/security tool.
 
 Use --raw with quota if Factory changes the limits response and you need the
 original API output.`)

@@ -1,6 +1,6 @@
 # Architecture
 
-Last verified: 2026-08-04
+Last verified: 2026-08-12
 
 ## Purpose
 
@@ -17,7 +17,7 @@ Last verified: 2026-08-04
 | `internal/switcher/login.go` | Droid-auth-backed login flow using isolated Factory homes |
 | `internal/switcher/droid.go` | Process runner that launches `droid` with `FACTORY_HOME_OVERRIDE` |
 | `internal/switcher/auth.go` | Droid encrypted-auth reader/writer used for quota token refresh |
-| `internal/switcher/keyring.go` | Auth storage format detection (keyfile-v2 vs keyring-v2) and OS keyring access via `secret-tool` |
+| `internal/switcher/keyring.go` | Auth-format detection and native secure-store access via macOS Login Keychain or Linux Secret Service |
 | `internal/switcher/factory_limits.go` | Factory limits API client and quota-window mapping |
 | `internal/switcher/quota.go` | Quota account resolution and report rendering |
 | `internal/switcher/metadata.go` | Label/default-account metadata persisted alongside saved accounts |
@@ -50,7 +50,7 @@ State is split into two layers:
 1. Per-account isolated Factory homes under `~/.droid-switcher/accounts/<name>/.factory`
 2. Small switcher-owned metadata files for active/default account markers, labels, and backups
 
-The `droid` binary remains the source of truth for authentication creation. The switcher stores Droid's encrypted auth files unchanged for switching, and quota reads those saved credentials only to refresh stale access tokens and call the same Factory limits backend used by Droid. Both of Droid's credential backends are supported: keyfile-v2 (`auth.v2.file` + `auth.v2.key`) and keyring-v2 (`auth.v2.keyring`, the Droid 0.186+ default, whose AES key lives in the OS keyring). For keyring accounts the switcher snapshots that key into the saved account home and restores it into the OS keyring on activation. Snapshots are verified by decrypting the credentials they protect (with recovery across duplicate keyring entries, which ksecretd keeps and Droid can add), and activation collapses the keyring to a single verified entry so Droid and the switcher always read the same key.
+The `droid` binary remains the source of truth for authentication creation. The switcher stores Droid's encrypted auth files unchanged for switching, and quota reads those saved credentials only to refresh stale access tokens and call the same Factory limits backend used by Droid. Supported backends are keyfile-v2 (`auth.v2.file` + `auth.v2.key`), Linux keyring-v2 (`auth.v2.keyring`), and macOS login-keychain-v2 (`auth.v2.loginkeychain`). Secure-format AES keys are snapshotted privately inside saved account homes, verified against their ciphertext, and restored to the matching native OS credential-store account on activation. Linux additionally recovers from duplicate Secret Service entries by trying every candidate key against the ciphertext.
 
 ## Decisions and Trade-offs
 
@@ -67,7 +67,7 @@ The `droid` binary remains the source of truth for authentication creation. The 
 - `internal/switcher/store.go` treats “active” and “default” as separate concepts. Changes that collapse them would alter quota and menu behavior.
 - `internal/switcher/store.go` also owns sync-back from live `~/.factory` into the active saved account. That behavior is part of the account-safety contract, not a convenience detail.
 - `internal/switcher/fileops.go` uses atomic writes for state files. Replacing those writes with direct writes would make interruptions riskier.
-- `internal/switcher/factory_limits.go` rewrites the account's credentials file (`auth.v2.file` or `auth.v2.keyring`, matching the account's format) only after a successful token refresh and preserves `active_organization_id`. Like current Droid, the WorkOS refresh deliberately omits `organization_id`; sending a stale one makes WorkOS reject the refresh with `organization_not_found`.
+- `internal/switcher/factory_limits.go` rewrites the account's credentials file matching its detected format only after a successful token refresh and preserves `active_organization_id`. Like current Droid, the WorkOS refresh deliberately omits `organization_id`; sending a stale one makes WorkOS reject the refresh with `organization_not_found`.
 - `--raw` is part of the quota contract when Factory's limits response changes.
 
 ## Related Docs

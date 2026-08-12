@@ -75,17 +75,25 @@ func saveDroidCredentials(factoryHome string, creds droidCredentials) error {
 
 // authCredentialsFileName returns the encrypted credentials file for a format.
 func authCredentialsFileName(format authFormat) string {
-	if format == authFormatKeyring {
+	switch format {
+	case authFormatKeyring:
 		return authKeyringFileName
+	case authFormatLoginKeychain:
+		return authLoginKeychainFileName
+	default:
+		return authFileName
 	}
-	return authFileName
 }
 
 func readDroidAuthKey(factoryHome string, format authFormat) ([]byte, error) {
 	keyFileName := authKeyFileName
-	if format == authFormatKeyring {
+	if usesSecureStorage(format) {
 		// Saved accounts carry a switcher-owned snapshot of the OS keyring key.
-		keyFileName = authKeyringKeyFileName
+		var err error
+		keyFileName, err = savedSecureKeyFileName(format)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// factoryHome is always a switcher-owned or Factory-owned home, never raw user input.
 	raw, err := os.ReadFile(filepath.Join(factoryHome, keyFileName)) //nolint:gosec // Path is scoped by validated account storage.

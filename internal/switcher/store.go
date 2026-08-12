@@ -60,12 +60,12 @@ func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error
 	if err := copyDirFiles(p.FactoryHome, dst, 0o600, authFilesForFormat(format)); err != nil {
 		return err
 	}
-	if format == authFormatKeyring {
-		key, err := snapshotSystemKeyringKey(p.FactoryHome)
+	if usesSecureStorage(format) {
+		key, err := snapshotSystemKeyringKey(p.FactoryHome, format)
 		if err != nil {
 			return fmt.Errorf("snapshot Droid keyring key: %w", err)
 		}
-		if err := writeSavedKeyringKey(dst, key); err != nil {
+		if err := writeSavedKeyringKey(dst, format, key); err != nil {
 			return err
 		}
 	}
@@ -116,12 +116,12 @@ func activateSavedAccount(p Paths, name string, stdout io.Writer) error {
 			return err
 		}
 	}
-	if format == authFormatKeyring {
-		key, err := readSavedKeyringKey(src)
+	if usesSecureStorage(format) {
+		key, err := readSavedKeyringKey(src, format)
 		if err != nil {
 			return err
 		}
-		if err := writeSystemKeyringKey(key); err != nil {
+		if err := writeSystemKeyringKey(format, key); err != nil {
 			return err
 		}
 	}
@@ -316,7 +316,7 @@ func ClearDefaultAccount(p Paths, stdout io.Writer) error {
 }
 
 // EnsureAuth verifies that a Factory home holds a complete Droid auth set in
-// either storage format (keyring-v2 or keyfile-v2).
+// any supported storage format.
 func EnsureAuth(factoryHome string) error {
 	_, err := requireAuthFormat(factoryHome)
 	return err
@@ -332,14 +332,19 @@ func EnsureSavedAuth(factoryHome string) error {
 	if err != nil {
 		return err
 	}
-	if format != authFormatKeyring {
+	if !usesSecureStorage(format) {
 		return nil
 	}
-	if !nonEmptyFile(filepath.Join(factoryHome, authKeyringKeyFileName)) {
-		return fmt.Errorf("%s exists but %s is missing; re-save with droid-switcher save --force", authKeyringFileName, authKeyringKeyFileName)
+	keyFileName, err := savedSecureKeyFileName(format)
+	if err != nil {
+		return err
+	}
+	credentialsFileName := authCredentialsFileName(format)
+	if !nonEmptyFile(filepath.Join(factoryHome, keyFileName)) {
+		return fmt.Errorf("%s exists but %s is missing; re-save with droid-switcher save --force", credentialsFileName, keyFileName)
 	}
 	if _, err := loadDroidCredentials(factoryHome); err != nil {
-		return fmt.Errorf("saved %s cannot be decrypted with %s: %w; re-login with droid-switcher login --force or re-save the account while it is active", authKeyringFileName, authKeyringKeyFileName, err)
+		return fmt.Errorf("saved %s cannot be decrypted with %s: %w; re-login with droid-switcher login --force or re-save the account while it is active", credentialsFileName, keyFileName, err)
 	}
 	return nil
 }
@@ -371,11 +376,11 @@ func BackupCurrentAuth(p Paths) (string, error) {
 	if err := copyDirFiles(p.FactoryHome, backupDir, 0o600, authFilesForFormat(format)); err != nil {
 		return "", err
 	}
-	if format == authFormatKeyring {
+	if usesSecureStorage(format) {
 		// Best effort: without the OS keyring key the backed-up ciphertext is
 		// undecryptable once the keyring entry changes.
-		if key, err := snapshotSystemKeyringKey(p.FactoryHome); err == nil {
-			if err := writeSavedKeyringKey(backupDir, key); err != nil {
+		if key, err := snapshotSystemKeyringKey(p.FactoryHome, format); err == nil {
+			if err := writeSavedKeyringKey(backupDir, format, key); err != nil {
 				return "", err
 			}
 		}
@@ -432,12 +437,12 @@ func SyncCurrentAuthToSavedAccount(p Paths, stdout io.Writer) error {
 	if err := copyDirFiles(src, dst, 0o600, authFilesForFormat(liveFormat)); err != nil {
 		return err
 	}
-	if liveFormat == authFormatKeyring {
-		key, err := snapshotSystemKeyringKey(src)
+	if usesSecureStorage(liveFormat) {
+		key, err := snapshotSystemKeyringKey(src, liveFormat)
 		if err != nil {
 			return fmt.Errorf("snapshot Droid keyring key: %w", err)
 		}
-		if err := writeSavedKeyringKey(dst, key); err != nil {
+		if err := writeSavedKeyringKey(dst, liveFormat, key); err != nil {
 			return err
 		}
 	}

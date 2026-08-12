@@ -14,7 +14,7 @@ This subsystem turns the switcher from a raw file-management tool into an operat
 | `internal/switcher/ui.go` | No-argument menu with guided flows for common tasks |
 | `internal/switcher/interactive.go` | Number-based account picker used by `select` and bare `switch` |
 | `internal/switcher/quota.go` | Resolves target accounts and renders quota summaries |
-| `internal/switcher/auth.go` | Reads and rewrites Droid's encrypted credentials in either storage format (keyfile-v2 or keyring-v2) |
+| `internal/switcher/auth.go` | Reads and rewrites Droid's encrypted credentials in keyfile-v2, Linux keyring-v2, or macOS login-keychain-v2 format |
 | `internal/switcher/factory_limits.go` | Refreshes expired saved tokens, calls Factory limits, and maps the `5h`, `1wk`, and `1month` windows |
 | `internal/switcher/display.go` | Builds user-facing account display strings from labels and ids |
 | `internal/switcher/store.go` | Supplies account state that drives menu badges and fallback behavior |
@@ -55,7 +55,7 @@ If multiple saved accounts share the same label, label-based selection is reject
 
 Once an account is selected, the switcher:
 
-1. Reads that account's encrypted Droid auth (`auth.v2.file` + `auth.v2.key` for keyfile accounts, or `auth.v2.keyring` + the switcher-owned `auth.v2.keyring.key` snapshot for keyring accounts).
+1. Reads that account's encrypted Droid auth and matching key snapshot: keyfile-v2, Linux keyring-v2, or macOS login-keychain-v2.
 2. Refreshes an expired WorkOS access token with the saved refresh token. Like current Droid, the refresh omits `organization_id`; the stored active organization id is only sent as the `X-Factory-Org-Id` header on the limits call.
 3. Calls `GET /api/billing/limits` with Droid-compatible Factory headers.
 4. Summarizes every billing group the API reports (`standard`, `core` / Factory Core, and any future groups), each into three windows:

@@ -12,7 +12,14 @@ const (
 	// keyring AES key. It is stored only inside saved account homes so quota
 	// refreshes and switching work without D-Bus access.
 	authKeyringKeyFileName = "auth.v2.keyring.key"
-	activeFileName         = "active"
+	// authLoginKeychainFileName is Droid's macOS login-keychain-v2 credential
+	// store. Its AES key lives in the user's macOS Login Keychain.
+	authLoginKeychainFileName = "auth.v2.loginkeychain"
+	// authLoginKeychainKeyFileName is the saved-account snapshot of the macOS
+	// Login Keychain AES key. Like the keyring snapshot, it never lives in the
+	// real Factory home.
+	authLoginKeychainKeyFileName = "auth.v2.loginkeychain.key"
+	activeFileName               = "active"
 )
 
 var seedFiles = []string{"settings.json", "settings-server.json", "mcp.json"}

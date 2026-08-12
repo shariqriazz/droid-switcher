@@ -142,19 +142,26 @@ droid-switcher switch
 droid-switcher select
 ```
 
-Both Droid credential storage formats are supported, and only the files of the
+All current Droid credential storage formats on macOS and Linux are supported,
+and only the files of the
 account's own format are swapped into the real `~/.factory`:
 
 - keyfile-v2: `auth.v2.file` + `auth.v2.key`
-- keyring-v2 (Droid 0.186+ default): `auth.v2.keyring`, plus a switcher-owned
+- keyring-v2 (Linux): `auth.v2.keyring`, plus a switcher-owned
   snapshot of the OS keyring encryption key (`auth.v2.keyring.key`, stored only
   in the saved account home)
+- login-keychain-v2 (macOS, including Droid 0.193+):
+  `auth.v2.loginkeychain`, plus a switcher-owned key snapshot
+  (`auth.v2.loginkeychain.key`, stored only in the saved account home)
 
-Switching to a keyring account writes that account's encryption key back into
-the OS keyring (service `Factory CLI`, account `auth-encryption-key`) via
-libsecret's `secret-tool`, and files of the other format are moved into the
-backup directory so Droid cannot pick up a stale login. Keyring support
-therefore requires `secret-tool` (package `libsecret`) on Linux.
+Switching to a secure-storage account writes that account's encryption key back
+into the native OS store. Linux uses service `Factory CLI`, account
+`auth-encryption-key`, via libsecret's `secret-tool`. macOS uses service
+`Factory CLI`, account `auth-encryption-key-security-cli`, via the built-in
+`/usr/bin/security` tool. Files of the other formats are moved into the backup
+directory so Droid cannot pick up a stale login. Linux secure-storage support
+therefore requires `secret-tool` (package `libsecret`); macOS has no additional
+dependency.
 
 Key snapshots are always verified against the encrypted credentials before
 being saved: if the keyring holds stale duplicate entries (some backends keep
@@ -263,7 +270,7 @@ keeps Go tooling and GitHub Actions updates visible as reviewable pull requests.
 
 ## Local Files
 
-- Active Droid auth: `***********************` and `~/.factory/auth.v2.key` (keyfile), or `~/.factory/auth.v2.keyring` (keyring)
+- Active Droid auth: `***********************` and `~/.factory/auth.v2.key` (keyfile), `~/.factory/auth.v2.keyring` (Linux keyring), or `~/.factory/auth.v2.loginkeychain` (macOS Login Keychain)
 - Saved accounts: `~/.droid-switcher/accounts/<name>/.factory`
 - Account labels: `~/.droid-switcher/accounts/<name>/account.json`
 - Default account: `~/.droid-switcher/default`

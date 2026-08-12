@@ -1,6 +1,6 @@
 # Account Lifecycle
 
-Last verified: 2026-08-04
+Last verified: 2026-08-12
 
 ## Purpose
 
@@ -27,8 +27,8 @@ This subsystem manages the full lifecycle of a saved Droid account: naming, logi
 3. The account gets its own isolated Factory home under `~/.droid-switcher/accounts/<name>/.factory`.
 4. Non-auth config files such as `settings.json`, `settings-server.json`, and `mcp.json` are copied into that isolated home.
 5. `droid` is launched with `FACTORY_HOME_OVERRIDE=<account-root>`, where `<account-root>` is `~/.droid-switcher/accounts/<name>`. Current Droid creates OAuth state in `<account-root>/.factory`.
-6. After Droid exits, the switcher validates the resulting auth set. Droid 0.186+ defaults to keyring-v2 (`auth.v2.keyring` with the AES key in the OS keyring); older or keyring-disabled builds produce keyfile-v2 (`auth.v2.file` + `auth.v2.key`). For keyring logins the switcher snapshots the OS keyring key into the account home as `auth.v2.keyring.key` so the account stays portable, and stale files of the other format are pruned. The snapshot is verified against the fresh ciphertext: if a plain keyring lookup returns a key that does not decrypt (stale duplicate entries, which some backends keep when Droid stores a freshly generated key), every entry is tried and the login fails loudly when none decrypts.
-7. The live `~/.factory` auth is backed up, the newly authenticated auth set is copied into place (restoring the OS keyring key for keyring accounts), and the account is marked active.
+6. After Droid exits, the switcher validates the resulting auth set. Linux secure storage uses keyring-v2 (`auth.v2.keyring` with account `auth-encryption-key` in Secret Service), while current macOS Droid uses login-keychain-v2 (`auth.v2.loginkeychain` with account `auth-encryption-key-security-cli` in Login Keychain). Keyring-disabled builds use keyfile-v2 (`auth.v2.file` + `auth.v2.key`). For either secure format, the switcher snapshots the AES key beside the saved account as a private `.key` file and verifies that it decrypts the fresh ciphertext before accepting the login.
+7. The live `~/.factory` auth is backed up, the newly authenticated auth set is copied into place (restoring its AES key into the native OS credential store), and the account is marked active.
 
 Before starting the isolated login, the switcher syncs the previous active
 account from live auth. This ordering prevents a later quota or switch command
@@ -48,7 +48,7 @@ If `--force` is used without a new `--label`, the existing saved label is preser
 - both the live and saved auth files are structurally valid
 - the saved and live auth contents differ, or the storage formats differ
 
-This exists because normal Droid usage can refresh tokens inside the real `~/.factory`, which would otherwise leave the saved copy stale. When the live home changed storage format (for example a plain Droid re-login landing on keyring-v2), the saved account is converted to the live format, including a fresh keyring key snapshot.
+This exists because normal Droid usage can refresh tokens inside the real `~/.factory`, which would otherwise leave the saved copy stale. When the live home changes storage format, the saved account is converted to the live format, including a fresh secure-store key snapshot when required.
 
 ### Switching accounts
 
@@ -56,6 +56,7 @@ This exists because normal Droid usage can refresh tokens inside the real `~/.fa
 
 - keyfile-v2: `auth.v2.file` and `auth.v2.key`
 - keyring-v2: `auth.v2.keyring`, and the account's key snapshot is written back into the OS keyring so Droid can decrypt it
+- login-keychain-v2: `auth.v2.loginkeychain`, and the account's key snapshot is written back into macOS Login Keychain so Droid can decrypt it
 
 Files belonging to the other format are moved into the backup directory so Droid never loads a stale login from the wrong backend.
 
@@ -80,8 +81,9 @@ Before the switch, the tool attempts to sync the current live auth back into the
 ## Gotchas
 
 - `internal/switcher/store.go` only switches the auth files of the account's own format plus the OS keyring key restore. If a future change requires more state to move, the docs and constants must change together.
-- Keyring support shells out to libsecret's `secret-tool` because Droid's keytar backend stores the AES key under service `Factory CLI`, account `auth-encryption-key` in the OS secret store. Without `secret-tool`, keyring-format accounts cannot be saved or activated.
-- The switcher-owned `auth.v2.keyring.key` snapshot only ever lives in saved account homes and backups, never in the real `~/.factory`.
+- Linux keyring support shells out to libsecret's `secret-tool` because Droid stores the AES key under service `Factory CLI`, account `auth-encryption-key`. Without `secret-tool`, Linux keyring-format accounts cannot be saved or activated.
+- macOS Login Keychain support uses the built-in `/usr/bin/security` executable and Droid's service/account pair `Factory CLI` / `auth-encryption-key-security-cli`; the key is sent over stdin when written, not exposed in process arguments.
+- Switcher-owned `auth.v2.keyring.key` and `auth.v2.loginkeychain.key` snapshots only live in saved account homes and backups, never in the real `~/.factory`.
 - Every keyring write is a clear-then-store with a read-back verification: duplicate entries for the same attributes (which ksecretd retains, and Droid creates when it generates a new key after a keyring read failure) make lookups ambiguous, so the switcher keeps exactly one entry holding the active account's key.
 - `secret-tool search` output is not trusted for attribute matching: ksecretd omits the `attribute.*` lines entirely at times, so `internal/switcher/keyring.go::parseSecretToolSearchOutput` relies on the command-line filter and only rejects blocks whose attributes explicitly contradict the search. Key selection is always settled by trying each candidate against the ciphertext, never by entry metadata.
 - `doctor` / `doctor --heal` (`internal/switcher/doctor.go`) is the recovery path when Droid asks for login after a switch: it reports which OS keyring entries decrypt the live home and rewrites the keyring to the single working key. It refuses to heal when no entry decrypts the live auth and points at `switch <account>` (restore from the verified saved copy) instead.

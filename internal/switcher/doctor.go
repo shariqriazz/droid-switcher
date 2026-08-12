@@ -29,8 +29,8 @@ func Doctor(p Paths, opts DoctorOptions, stdout io.Writer) error {
 		return nil
 	}
 
-	lookup, lookupErr := readSystemKeyringKey()
-	entries, listErr := readAllSystemKeyringKeys()
+	lookup, lookupErr := readSystemKeyringKey(format)
+	entries, listErr := readAllSystemKeyringKeys(format)
 	switch {
 	case listErr == nil:
 		fmt.Fprintf(stdout, "OS keyring entries for Droid's key: %d\n", len(entries))
@@ -44,14 +44,14 @@ func Doctor(p Paths, opts DoctorOptions, stdout io.Writer) error {
 	var correct []byte
 	decrypting := 0
 	for _, entry := range entries {
-		if keyringKeyDecryptsHome(p.FactoryHome, entry) {
+		if keyringKeyDecryptsHome(p.FactoryHome, format, entry) {
 			decrypting++
 			if correct == nil {
 				correct = entry
 			}
 		}
 	}
-	lookupOK := lookupErr == nil && keyringKeyDecryptsHome(p.FactoryHome, lookup)
+	lookupOK := lookupErr == nil && keyringKeyDecryptsHome(p.FactoryHome, format, lookup)
 	fmt.Fprintf(stdout, "Plain keyring lookup decrypts the live home: %s\n", yesNo(lookupOK))
 	if len(entries) > 1 {
 		fmt.Fprintf(stdout, "Duplicate keyring entries hold %d distinct keys; %d of %d decrypt the live home.\n", len(entries), decrypting, len(entries))
@@ -59,7 +59,7 @@ func Doctor(p Paths, opts DoctorOptions, stdout io.Writer) error {
 	if correct == nil {
 		fmt.Fprintln(stdout, "No OS keyring entry decrypts the live home; Droid will ask for login.")
 		printDoctorRecovery(p, stdout)
-		return fmt.Errorf("no OS keyring entry decrypts %s", authKeyringFileName)
+		return fmt.Errorf("no OS keyring entry decrypts %s", authCredentialsFileName(format))
 	}
 
 	printDoctorSavedAccounts(p, stdout)
@@ -75,10 +75,10 @@ func Doctor(p Paths, opts DoctorOptions, stdout io.Writer) error {
 	}
 
 	fmt.Fprintln(stdout, "Healing: rewriting the OS keyring to the single key that decrypts the live home...")
-	if err := writeSystemKeyringKey(correct); err != nil {
+	if err := writeSystemKeyringKey(format, correct); err != nil {
 		return err
 	}
-	after, err := readAllSystemKeyringKeys()
+	after, err := readAllSystemKeyringKeys(format)
 	if err != nil {
 		fmt.Fprintf(stdout, "Healed the lookup result, but re-listing entries failed: %v\n", err)
 		return nil
@@ -92,7 +92,7 @@ func Doctor(p Paths, opts DoctorOptions, stdout io.Writer) error {
 	if strays > 0 {
 		fmt.Fprintf(stdout, "The secret-service backend kept %d stale entries holding other keys; Droid may still read one of them. "+
 			"Delete the remaining %q/%q items manually (KDE Wallet Manager, or busctl --user call org.freedesktop.secrets <item-path> org.freedesktop.Secret.Item Delete).\n",
-			strays, droidKeyringService, droidKeyringAccount())
+			strays, droidKeyringService, mustSecureStorageAccount(format))
 		return fmt.Errorf("secret-service backend kept %d stale keyring entries after heal", strays)
 	}
 	fmt.Fprintln(stdout, "Keyring healed: exactly one entry remains and it decrypts the live home.")
@@ -137,9 +137,16 @@ func authFormatName(format authFormat) string {
 		return "keyfile-v2 (auth.v2.file/auth.v2.key)"
 	case authFormatKeyring:
 		return "keyring-v2 (auth.v2.keyring)"
+	case authFormatLoginKeychain:
+		return "login-keychain-v2 (auth.v2.loginkeychain)"
 	default:
 		return "none"
 	}
+}
+
+func mustSecureStorageAccount(format authFormat) string {
+	account, _ := droidSecureStorageAccount(format)
+	return account
 }
 
 func yesNo(ok bool) string {
