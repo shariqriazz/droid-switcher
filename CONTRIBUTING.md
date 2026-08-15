@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.26.5 or newer
+- Go 1.26.6 or newer
 - Git
 
 The lint and vulnerability tools are pinned in `go.mod`; no separate global

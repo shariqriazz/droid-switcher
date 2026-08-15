@@ -253,7 +253,7 @@ droid-switcher version
 
 ## Development
 
-The project targets Go 1.26.5 and pins its lint and vulnerability tools through
+The project targets Go 1.26.6 and pins its lint and vulnerability tools through
 `go.mod`.
 
 ```bash
