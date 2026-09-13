@@ -1130,7 +1130,7 @@ func TestNoArgsOpensMenu(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	writeAuth(t, p.AccountFactoryHome("alpha"), "file", "key")
 	var out, errOut bytes.Buffer
-	cli := CLI{Paths: p, Stdin: strings.NewReader("10\n"), Stdout: &out, Stderr: &errOut}
+	cli := CLI{Paths: p, Stdin: strings.NewReader("12\n"), Stdout: &out, Stderr: &errOut}
 	if err := cli.Run([]string{"droid-switcher"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1438,5 +1438,198 @@ func assertFile(t *testing.T, path, want string) {
 	}
 	if string(got) != want {
 		t.Fatalf("%s = %q, want %q", path, string(got), want)
+	}
+}
+
+func writeTestSession(t *testing.T, path, id, title, orgID, cwd string, extraLines ...string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start := map[string]any{
+		"type":  "session_start",
+		"id":    id,
+		"title": title,
+		"cwd":   cwd,
+	}
+	if orgID != "" {
+		start["organizationId"] = orgID
+	}
+	data, err := json.Marshal(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data) + "\n"
+	for _, l := range extraLines {
+		content += l + "\n"
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFindAndShareSessions(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	sessDir := p.FactorySessions()
+
+	s1 := filepath.Join(sessDir, "-project-a", "s1.jsonl")
+	s2 := filepath.Join(sessDir, "-project-b", "s2.jsonl")
+	s3 := filepath.Join(sessDir, "s3.jsonl")
+
+	writeTestSession(t, s1, "s1", "Session 1", "org-a", "/project-a", `{"type":"message","text":"hello"}`)
+	writeTestSession(t, s2, "s2", "Session 2", "", "/project-b")
+	writeTestSession(t, s3, "s3", "Session 3", "org-b", "/project-c")
+
+	found, err := FindSessions(sessDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 3 {
+		t.Fatalf("expected 3 sessions, got %d", len(found))
+	}
+
+	// Filter by session ID
+	filtered, err := FindSessions(sessDir, []string{"s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].ID != "s1" {
+		t.Fatalf("expected filtered session s1, got %+v", filtered)
+	}
+
+	// Dry run should not modify files
+	var dryOut bytes.Buffer
+	if err := ShareSessions(p, ShareOptions{DryRun: true}, &dryOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(dryOut.String(), "Dry run: 2 session(s) would be updated") {
+		t.Fatalf("unexpected dry run output: %s", dryOut.String())
+	}
+	// Check s1 still has org-a
+	s1Info, _ := readSessionSummary(s1)
+	if s1Info.OrganizationID != "org-a" {
+		t.Fatalf("expected s1 to still have org-a, got %q", s1Info.OrganizationID)
+	}
+
+	// Real share: should unbind s1 and s3
+	var shareOut bytes.Buffer
+	if err := ShareSessions(p, ShareOptions{}, &shareOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(shareOut.String(), "Shared 2 session(s) across accounts") {
+		t.Fatalf("unexpected share output: %s", shareOut.String())
+	}
+
+	s1Info, _ = readSessionSummary(s1)
+	if s1Info.OrganizationID != "" {
+		t.Fatalf("expected s1 org to be cleared, got %q", s1Info.OrganizationID)
+	}
+	// Verify second line was preserved
+	content, err := os.ReadFile(s1) //nolint:gosec // Test paths are created inside t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `{"type":"message","text":"hello"}`) {
+		t.Fatalf("expected preserved message content in s1, got:\n%s", string(content))
+	}
+
+	// Running share again should report already shared
+	shareOut.Reset()
+	if err := ShareSessions(p, ShareOptions{}, &shareOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(shareOut.String(), "All sessions are already shared across accounts") {
+		t.Fatalf("unexpected already-shared output: %s", shareOut.String())
+	}
+}
+
+func TestShareSessionsAdopt(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	sessDir := p.FactorySessions()
+	s1 := filepath.Join(sessDir, "s1.jsonl")
+	writeTestSession(t, s1, "s1", "Session 1", "org-old", "/project")
+
+	var out bytes.Buffer
+	if err := ShareSessions(p, ShareOptions{AdoptOrg: "org-new"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Adopted 1 session(s) into organization org-new") {
+		t.Fatalf("unexpected adopt output: %s", out.String())
+	}
+	info, _ := readSessionSummary(s1)
+	if info.OrganizationID != "org-new" {
+		t.Fatalf("expected org-new, got %q", info.OrganizationID)
+	}
+}
+
+func TestSwitchAccountShareSessionsAndNotice(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	writeEncryptedAuth(t, p.AccountFactoryHome("bizkit"), droidCredentials{
+		AccessToken:          "bizkit-access",
+		RefreshToken:         "bizkit-refresh",
+		ActiveOrganizationID: "org-bizkit",
+	})
+	writeEncryptedAuth(t, p.FactoryHome, droidCredentials{
+		AccessToken:          "involens-access",
+		RefreshToken:         "involens-refresh",
+		ActiveOrganizationID: "org-involens",
+	})
+
+	s1 := filepath.Join(p.FactorySessions(), "s1.jsonl")
+	writeTestSession(t, s1, "s1", "Session Involens", "org-involens", "/devel")
+
+	// Switch without share-sessions should print notice
+	var out bytes.Buffer
+	if err := SwitchAccount(p, "bizkit", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Notice: 1 session(s) belong to organization \"org-involens\"") {
+		t.Fatalf("expected notice about hidden sessions, got:\n%s", out.String())
+	}
+
+	// Switch back to involens and then switch with ShareSessions
+	writeEncryptedAuth(t, p.AccountFactoryHome("involens"), droidCredentials{
+		AccessToken:          "involens-access",
+		RefreshToken:         "involens-refresh",
+		ActiveOrganizationID: "org-involens",
+	})
+	out.Reset()
+	if err := SwitchAccountWithOptions(p, "involens", SwitchOptions{ShareSessions: true}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Shared 1 session(s) across accounts") {
+		t.Fatalf("expected shared sessions message, got:\n%s", out.String())
+	}
+
+	info, _ := readSessionSummary(s1)
+	if info.OrganizationID != "" {
+		t.Fatalf("expected session to be unbound, got %q", info.OrganizationID)
+	}
+}
+
+func TestCLIShareSessions(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	s1 := filepath.Join(p.FactorySessions(), "s1.jsonl")
+	writeTestSession(t, s1, "s1", "Session 1", "org-x", "/dir")
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	cli := CLI{Paths: p, Stdout: &out, Stderr: &errOut}
+
+	// Test list
+	if err := cli.Run([]string{"droid-switcher", "share-sessions", "--list"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "SESSION ID") || !strings.Contains(out.String(), "org-x") {
+		t.Fatalf("unexpected list output: %s", out.String())
+	}
+
+	// Test run
+	out.Reset()
+	if err := cli.Run([]string{"droid-switcher", "share-sessions"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Shared 1 session(s) across accounts") {
+		t.Fatalf("unexpected run output: %s", out.String())
 	}
 }

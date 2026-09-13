@@ -64,6 +64,7 @@ func RunMenu(c CLI) error {
 		"Switch account",
 		"Show quota for current/default account",
 		"Compare quota across all accounts",
+		"Share sessions across accounts",
 		"Add account with Droid login",
 		"Save current ~/.factory login",
 		"Set default account",
@@ -84,6 +85,8 @@ func RunMenu(c CLI) error {
 	case 2:
 		return c.Run([]string{"droid-switcher", "quota", "--all"})
 	case 3:
+		return c.Run([]string{"droid-switcher", "share-sessions"})
+	case 4:
 		name, err := promptLine(c.Stdin, c.Stdout, "Account name (blank = generate): ")
 		if err != nil {
 			return err
@@ -100,7 +103,7 @@ func RunMenu(c CLI) error {
 			args = append(args, name)
 		}
 		return c.Run(args)
-	case 4:
+	case 5:
 		name, err := promptLine(c.Stdin, c.Stdout, "Save as account name (blank = generate): ")
 		if err != nil {
 			return err
@@ -117,13 +120,13 @@ func RunMenu(c CLI) error {
 			args = append(args, name)
 		}
 		return c.Run(args)
-	case 5:
+	case 6:
 		name, err := SelectAccount(c.Paths, c.Stdin, c.Stdout)
 		if err != nil {
 			return err
 		}
 		return c.Run([]string{"droid-switcher", "default", name})
-	case 6:
+	case 7:
 		name, err := SelectAccount(c.Paths, c.Stdin, c.Stdout)
 		if err != nil {
 			return err
@@ -133,7 +136,7 @@ func RunMenu(c CLI) error {
 			return err
 		}
 		return c.Run([]string{"droid-switcher", "rename", name, newName})
-	case 7:
+	case 8:
 		name, err := SelectAccount(c.Paths, c.Stdin, c.Stdout)
 		if err != nil {
 			return err
@@ -146,7 +149,7 @@ func RunMenu(c CLI) error {
 			return c.Run([]string{"droid-switcher", "label", name, "--clear"})
 		}
 		return c.Run([]string{"droid-switcher", "label", name, label})
-	case 8:
+	case 9:
 		name, err := SelectAccount(c.Paths, c.Stdin, c.Stdout)
 		if err != nil {
 			return err
@@ -160,7 +163,7 @@ func RunMenu(c CLI) error {
 			return nil
 		}
 		return c.Run([]string{"droid-switcher", "remove", name})
-	case 9:
+	case 10:
 		return c.Run([]string{"droid-switcher", "doctor"})
 	default:
 		PrintUsage(c.Stdout)

@@ -39,3 +39,8 @@ func NewPaths(home string) Paths {
 func (p Paths) AccountFactoryHome(name string) string {
 	return filepath.Join(p.Accounts, name, factoryDirName)
 }
+
+// FactorySessions returns the live Factory sessions directory.
+func (p Paths) FactorySessions() string {
+	return filepath.Join(p.FactoryHome, "sessions")
+}

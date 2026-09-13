@@ -85,6 +85,7 @@ common operations:
 - switch account
 - show quota
 - compare quota across all accounts
+- share sessions across accounts
 - add a new Droid login
 - save the current `~/.factory` auth
 - set default account
@@ -190,6 +191,35 @@ the live auth and prints the recovery path instead (usually
 Current auth is backed up before replacement when valid auth already exists.
 Before switching away from an active saved account, the switcher also syncs the
 live auth back into that saved account when it detects changes.
+
+### Session Sharing Across Accounts
+
+Droid permanently stamps each session with the active account's organization ID.
+When you switch to an account with a different organization ID, Droid hides
+sessions created under other organizations from `droid resume` and rejects
+resuming them.
+
+`droid-switcher` provides session sharing by removing the organization lock so
+sessions remain universally accessible across all your saved accounts:
+
+```bash
+# Share all sessions across all accounts (removes the organization lock)
+drsw share-sessions
+
+# Preview changes without modifying files
+drsw share-sessions --dry-run
+
+# List sessions and their current organization binding
+drsw share-sessions --list
+
+# Switch account and share sessions in one step
+drsw switch work --share-sessions
+drsw switch work -s
+```
+
+When switching between accounts with different organizations, `drsw switch`
+automatically alerts you if previous sessions would be hidden and prints the
+exact command to unlock them.
 
 ### Quota
 

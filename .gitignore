@@ -6,3 +6,4 @@ droid-switcher
 *.swo
 .idea/
 .vscode/
+HANDOFF-*.md

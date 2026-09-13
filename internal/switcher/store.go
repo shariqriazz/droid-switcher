@@ -82,8 +82,19 @@ func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error
 	return writeActive(p, name, stdout)
 }
 
+// SwitchOptions controls additional behavior during account switching.
+type SwitchOptions struct {
+	ShareSessions bool
+}
+
 // SwitchAccount syncs the previous account and activates a saved auth pair.
 func SwitchAccount(p Paths, name string, stdout io.Writer) error {
+	return SwitchAccountWithOptions(p, name, SwitchOptions{}, stdout)
+}
+
+// SwitchAccountWithOptions syncs the previous account, activates saved auth,
+// and optionally shares sessions across accounts or notices org differences.
+func SwitchAccountWithOptions(p Paths, name string, opts SwitchOptions, stdout io.Writer) error {
 	name, err := CleanAccountName(name)
 	if err != nil {
 		return err
@@ -92,10 +103,32 @@ func SwitchAccount(p Paths, name string, stdout io.Writer) error {
 	if err := EnsureSavedAuth(src); err != nil {
 		return fmt.Errorf("saved account %q is not usable: %w", name, err)
 	}
+
+	prevCreds, _ := loadDroidCredentials(p.FactoryHome)
+	targetCreds, _ := loadDroidCredentials(src)
+
 	if err := SyncCurrentAuthToSavedAccount(p, io.Discard); err != nil {
 		return err
 	}
-	return activateSavedAccount(p, name, stdout)
+	if err := activateSavedAccount(p, name, stdout); err != nil {
+		return err
+	}
+
+	if opts.ShareSessions {
+		return ShareSessions(p, ShareOptions{}, stdout)
+	}
+
+	if prevCreds.ActiveOrganizationID != "" && targetCreds.ActiveOrganizationID != "" &&
+		prevCreds.ActiveOrganizationID != targetCreds.ActiveOrganizationID {
+		count, _ := CountBoundSessions(p.FactorySessions(), prevCreds.ActiveOrganizationID)
+		if count > 0 {
+			fmt.Fprintf(stdout, "\nNotice: %d session(s) belong to organization %q and will be hidden by Droid while %q is active.\n"+
+				"To make them accessible across accounts, run: droid-switcher share-sessions\n"+
+				"Or next time switch with: droid-switcher switch %s --share-sessions\n",
+				count, prevCreds.ActiveOrganizationID, name, name)
+		}
+	}
+	return nil
 }
 
 func activateSavedAccount(p Paths, name string, stdout io.Writer) error {

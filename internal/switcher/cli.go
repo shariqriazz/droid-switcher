@@ -65,36 +65,43 @@ func (c CLI) Run(args []string) error {
 	case "switch", "sw", "s":
 		fs := flag.NewFlagSet("switch", flag.ContinueOnError)
 		fs.SetOutput(stderr)
-		if err := fs.Parse(args[2:]); err != nil {
+		shareSessions := boolFlag(fs, "share-sessions", "s", false, "remove organization lock on sessions so they remain accessible across accounts")
+		shareShort := fs.Bool("share", false, "alias for --share-sessions")
+		positionals, err := parseInterspersed(fs, args[2:])
+		if err != nil {
 			return err
 		}
+		share := *shareSessions || *shareShort
 		var name string
-		if fs.NArg() == 0 {
+		if len(positionals) == 0 {
 			var err error
 			name, err = SelectAccount(p, c.Stdin, stdout)
 			if err != nil {
 				return err
 			}
-		} else if fs.NArg() == 1 {
-			name = fs.Arg(0)
+		} else if len(positionals) == 1 {
+			name = positionals[0]
 		} else {
-			return errors.New("usage: droid-switcher switch [account]")
+			return errors.New("usage: droid-switcher switch [account] [--share-sessions|-s]")
 		}
-		return SwitchAccount(p, name, stdout)
+		return SwitchAccountWithOptions(p, name, SwitchOptions{ShareSessions: share}, stdout)
 	case "select", "sel":
 		fs := flag.NewFlagSet("select", flag.ContinueOnError)
 		fs.SetOutput(stderr)
-		if err := fs.Parse(args[2:]); err != nil {
+		shareSessions := boolFlag(fs, "share-sessions", "s", false, "remove organization lock on sessions so they remain accessible across accounts")
+		shareShort := fs.Bool("share", false, "alias for --share-sessions")
+		positionals, err := parseInterspersed(fs, args[2:])
+		if err != nil {
 			return err
 		}
-		if fs.NArg() != 0 {
-			return errors.New("usage: droid-switcher select")
+		if len(positionals) != 0 {
+			return errors.New("usage: droid-switcher select [--share-sessions|-s]")
 		}
 		name, err := SelectAccount(p, c.Stdin, stdout)
 		if err != nil {
 			return err
 		}
-		return SwitchAccount(p, name, stdout)
+		return SwitchAccountWithOptions(p, name, SwitchOptions{ShareSessions: *shareSessions || *shareShort}, stdout)
 	case "quota", "limits", "q":
 		fs := flag.NewFlagSet("quota", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -226,6 +233,22 @@ func (c CLI) Run(args []string) error {
 			}
 		}
 		return RemoveAccount(p, positionals[0], stdout)
+	case "share-sessions", "share", "unbind-sessions":
+		fs := flag.NewFlagSet("share-sessions", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		dryRun := boolFlag(fs, "dry-run", "n", false, "preview session updates without modifying files")
+		list := boolFlag(fs, "list", "l", false, "list sessions and their organization binding")
+		adopt := stringFlag(fs, "adopt", "", "", "adopt sessions into this organization ID instead of removing lock")
+		positionals, err := parseInterspersed(fs, args[2:])
+		if err != nil {
+			return err
+		}
+		return ShareSessions(p, ShareOptions{
+			SessionIDs: positionals,
+			DryRun:     *dryRun,
+			List:       *list,
+			AdoptOrg:   *adopt,
+		}, stdout)
 	case "version", "v":
 		if len(args) != 2 {
 			return errors.New("usage: droid-switcher version")
@@ -315,6 +338,7 @@ func PrintUsage(w io.Writer) {
   droid-switcher sync-current|sync            Sync the live ~/.factory auth back into the active saved account
   droid-switcher doctor|doc [--heal]          Diagnose Droid OS keyring state; --heal rewrites it to the single working key
   droid-switcher switch|sw|s [account]        Make an account active for normal droid runs
+  droid-switcher share-sessions|share         Remove organization locks so sessions are shared across accounts
   droid-switcher select|sel                   Pick a saved account interactively
   droid-switcher quota|limits|q [account]     Show Factory quota for a saved account
   droid-switcher quota|q --all|-a             Compare quota across every saved account
@@ -330,7 +354,9 @@ func PrintUsage(w io.Writer) {
 
 Short flags:
   -a, --all      Show quota for all accounts
+  -s, --share    Share sessions across accounts on switch
   -r, --raw      Include raw Factory limits response
+  -n, --dry-run  Preview changes without modifying files
   -d, --droid    Path to the droid executable for login; accepted by quota for compatibility
   -l, --label    Friendly account label
   -f, --force    Overwrite existing saved account
