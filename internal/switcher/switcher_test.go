@@ -1578,32 +1578,29 @@ func TestSwitchAccountShareSessionsAndNotice(t *testing.T) {
 	s1 := filepath.Join(p.FactorySessions(), "s1.jsonl")
 	writeTestSession(t, s1, "s1", "Session Involens", "org-involens", "/devel")
 
-	// Switch without share-sessions should print notice
+	// Default switch should automatically unbind and share sessions
 	var out bytes.Buffer
 	if err := SwitchAccount(p, "bizkit", &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Notice: 1 session(s) belong to organization \"org-involens\"") {
-		t.Fatalf("expected notice about hidden sessions, got:\n%s", out.String())
+	info, _ := readSessionSummary(s1)
+	if info.OrganizationID != "" {
+		t.Fatalf("expected session to be automatically unbound on switch, got %q", info.OrganizationID)
 	}
 
-	// Switch back to involens and then switch with ShareSessions
+	// Re-bind session and switch with NoShare: should print notice
+	writeTestSession(t, s1, "s1", "Session Bizkit", "org-bizkit", "/devel")
 	writeEncryptedAuth(t, p.AccountFactoryHome("involens"), droidCredentials{
 		AccessToken:          "involens-access",
 		RefreshToken:         "involens-refresh",
 		ActiveOrganizationID: "org-involens",
 	})
 	out.Reset()
-	if err := SwitchAccountWithOptions(p, "involens", SwitchOptions{ShareSessions: true}, &out); err != nil {
+	if err := SwitchAccountWithOptions(p, "involens", SwitchOptions{NoShare: true}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Shared 1 session(s) across accounts") {
-		t.Fatalf("expected shared sessions message, got:\n%s", out.String())
-	}
-
-	info, _ := readSessionSummary(s1)
-	if info.OrganizationID != "" {
-		t.Fatalf("expected session to be unbound, got %q", info.OrganizationID)
+	if !strings.Contains(out.String(), "Notice: 1 session(s) belong to organization \"org-bizkit\"") {
+		t.Fatalf("expected notice about hidden sessions when NoShare is set, got:\n%s", out.String())
 	}
 }
 
@@ -1624,12 +1621,45 @@ func TestCLIShareSessions(t *testing.T) {
 		t.Fatalf("unexpected list output: %s", out.String())
 	}
 
-	// Test run
+	// Test run via --share top-level shorthand
 	out.Reset()
-	if err := cli.Run([]string{"droid-switcher", "share-sessions"}); err != nil {
+	if err := cli.Run([]string{"drsw", "--share"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Shared 1 session(s) across accounts") {
 		t.Fatalf("unexpected run output: %s", out.String())
+	}
+
+	// Test run via -s top-level shorthand
+	writeTestSession(t, s1, "s1", "Session 1", "org-x", "/dir")
+	out.Reset()
+	if err := cli.Run([]string{"drsw", "-s"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Shared 1 session(s) across accounts") {
+		t.Fatalf("unexpected run output for -s: %s", out.String())
+	}
+}
+
+func TestMigrateStrandedSessions(t *testing.T) {
+	p := NewPaths(t.TempDir())
+	accountSessionsDir := filepath.Join(p.AccountFactoryHome("bizkit"), "sessions", "-my-project")
+	strandedFile := filepath.Join(accountSessionsDir, "stranded.jsonl")
+	writeTestSession(t, strandedFile, "stranded", "Stranded Session", "org-z", "/my-project")
+
+	migrated, err := MigrateStrandedSessions(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated != 1 {
+		t.Fatalf("expected 1 migrated session, got %d", migrated)
+	}
+
+	destFile := filepath.Join(p.FactorySessions(), "-my-project", "stranded.jsonl")
+	if _, err := os.Stat(destFile); err != nil {
+		t.Fatalf("expected dest file to exist: %v", err)
+	}
+	if _, err := os.Stat(strandedFile); !os.IsNotExist(err) {
+		t.Fatalf("expected source stranded file to be cleaned up")
 	}
 }

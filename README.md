@@ -199,27 +199,28 @@ When you switch to an account with a different organization ID, Droid hides
 sessions created under other organizations from `droid resume` and rejects
 resuming them.
 
-`droid-switcher` provides session sharing by removing the organization lock so
-sessions remain universally accessible across all your saved accounts:
+`droid-switcher` automatically unlocks sessions across accounts by default
+whenever you switch or log in, so you never lose your sessions when switching
+accounts:
 
 ```bash
-# Share all sessions across all accounts (removes the organization lock)
-drsw share-sessions
+# Switching accounts unlocks sessions automatically:
+drsw switch work
 
-# Preview changes without modifying files
-drsw share-sessions --dry-run
+# To keep organizations isolated instead, pass --no-share:
+drsw switch work --no-share
 
-# List sessions and their current organization binding
-drsw share-sessions --list
+# Share all sessions manually at any time:
+drsw --share
+drsw share
+drsw -s
 
-# Switch account and share sessions in one step
-drsw switch work --share-sessions
-drsw switch work -s
+# Preview changes without modifying files:
+drsw share --dry-run
+
+# List sessions and their current organization binding:
+drsw share --list
 ```
-
-When switching between accounts with different organizations, `drsw switch`
-automatically alerts you if previous sessions would be hidden and prints the
-exact command to unlock them.
 
 ### Quota
 

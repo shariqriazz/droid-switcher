@@ -69,5 +69,10 @@ func Login(p Paths, name, droidPath, label string, force bool, stdout io.Writer)
 	if err := saveAccountMetadata(p, name, AccountMetadata{Label: label}); err != nil {
 		return err
 	}
-	return activateSavedAccount(p, name, stdout)
+	if err := activateSavedAccount(p, name, stdout); err != nil {
+		return err
+	}
+	_, _ = MigrateStrandedSessions(p)
+	_ = ShareSessions(p, ShareOptions{}, io.Discard)
+	return nil
 }

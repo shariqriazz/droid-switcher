@@ -65,13 +65,13 @@ func (c CLI) Run(args []string) error {
 	case "switch", "sw", "s":
 		fs := flag.NewFlagSet("switch", flag.ContinueOnError)
 		fs.SetOutput(stderr)
-		shareSessions := boolFlag(fs, "share-sessions", "s", false, "remove organization lock on sessions so they remain accessible across accounts")
-		shareShort := fs.Bool("share", false, "alias for --share-sessions")
+		noShare := boolFlag(fs, "no-share", "", false, "do not unlock sessions across accounts")
+		_ = boolFlag(fs, "share-sessions", "s", true, "unlock sessions across accounts (default true)")
+		_ = fs.Bool("share", true, "alias for --share-sessions")
 		positionals, err := parseInterspersed(fs, args[2:])
 		if err != nil {
 			return err
 		}
-		share := *shareSessions || *shareShort
 		var name string
 		if len(positionals) == 0 {
 			var err error
@@ -82,26 +82,27 @@ func (c CLI) Run(args []string) error {
 		} else if len(positionals) == 1 {
 			name = positionals[0]
 		} else {
-			return errors.New("usage: droid-switcher switch [account] [--share-sessions|-s]")
+			return errors.New("usage: droid-switcher switch [account] [--no-share]")
 		}
-		return SwitchAccountWithOptions(p, name, SwitchOptions{ShareSessions: share}, stdout)
+		return SwitchAccountWithOptions(p, name, SwitchOptions{NoShare: *noShare}, stdout)
 	case "select", "sel":
 		fs := flag.NewFlagSet("select", flag.ContinueOnError)
 		fs.SetOutput(stderr)
-		shareSessions := boolFlag(fs, "share-sessions", "s", false, "remove organization lock on sessions so they remain accessible across accounts")
-		shareShort := fs.Bool("share", false, "alias for --share-sessions")
+		noShare := boolFlag(fs, "no-share", "", false, "do not unlock sessions across accounts")
+		_ = boolFlag(fs, "share-sessions", "s", true, "unlock sessions across accounts (default true)")
+		_ = fs.Bool("share", true, "alias for --share-sessions")
 		positionals, err := parseInterspersed(fs, args[2:])
 		if err != nil {
 			return err
 		}
 		if len(positionals) != 0 {
-			return errors.New("usage: droid-switcher select [--share-sessions|-s]")
+			return errors.New("usage: droid-switcher select [--no-share]")
 		}
 		name, err := SelectAccount(p, c.Stdin, stdout)
 		if err != nil {
 			return err
 		}
-		return SwitchAccountWithOptions(p, name, SwitchOptions{ShareSessions: *shareSessions || *shareShort}, stdout)
+		return SwitchAccountWithOptions(p, name, SwitchOptions{NoShare: *noShare}, stdout)
 	case "quota", "limits", "q":
 		fs := flag.NewFlagSet("quota", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -233,7 +234,7 @@ func (c CLI) Run(args []string) error {
 			}
 		}
 		return RemoveAccount(p, positionals[0], stdout)
-	case "share-sessions", "share", "unbind-sessions":
+	case "share-sessions", "--share-sessions", "share", "--share", "-s", "unbind-sessions", "--unbind-sessions", "unbind", "--unbind":
 		fs := flag.NewFlagSet("share-sessions", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		dryRun := boolFlag(fs, "dry-run", "n", false, "preview session updates without modifying files")
@@ -337,8 +338,8 @@ func PrintUsage(w io.Writer) {
   droid-switcher save-current|save|sc [acct]  Save the current ~/.factory auth as an account
   droid-switcher sync-current|sync            Sync the live ~/.factory auth back into the active saved account
   droid-switcher doctor|doc [--heal]          Diagnose Droid OS keyring state; --heal rewrites it to the single working key
-  droid-switcher switch|sw|s [account]        Make an account active for normal droid runs
-  droid-switcher share-sessions|share         Remove organization locks so sessions are shared across accounts
+  droid-switcher switch|sw|s [account]        Make an account active for normal droid runs (shares sessions by default)
+  droid-switcher share-sessions|share|--share Remove organization locks so sessions are shared across accounts
   droid-switcher select|sel                   Pick a saved account interactively
   droid-switcher quota|limits|q [account]     Show Factory quota for a saved account
   droid-switcher quota|q --all|-a             Compare quota across every saved account
@@ -354,7 +355,7 @@ func PrintUsage(w io.Writer) {
 
 Short flags:
   -a, --all      Show quota for all accounts
-  -s, --share    Share sessions across accounts on switch
+  --no-share     Keep organization isolation on switch (do not unlock sessions)
   -r, --raw      Include raw Factory limits response
   -n, --dry-run  Preview changes without modifying files
   -d, --droid    Path to the droid executable for login; accepted by quota for compatibility

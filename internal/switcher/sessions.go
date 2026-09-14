@@ -128,8 +128,49 @@ func CountBoundSessions(sessionsDir, orgID string) (int, error) {
 	return count, nil
 }
 
+// MigrateStrandedSessions moves sessions created inside saved account homes (e.g. during login)
+// into the live Factory sessions directory so Droid can see them.
+func MigrateStrandedSessions(p Paths) (int, error) {
+	if _, err := os.Stat(p.Accounts); os.IsNotExist(err) {
+		return 0, nil
+	}
+
+	migrated := 0
+	err := filepath.WalkDir(p.Accounts, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(p.Accounts, path)
+		if err != nil {
+			return nil
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) < 4 || parts[1] != factoryDirName || parts[2] != "sessions" {
+			return nil
+		}
+		subPath := filepath.Join(parts[3:]...)
+		dest := filepath.Join(p.FactorySessions(), subPath)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+			return err
+		}
+		if _, err := os.Stat(dest); os.IsNotExist(err) {
+			if err := copyFile(path, dest, 0o600); err != nil {
+				return err
+			}
+			migrated++
+		}
+		_ = os.Remove(path) //nolint:gosec // Scoped within switcher-owned account directories.
+		return nil
+	})
+	return migrated, err
+}
+
 // ShareSessions removes organization constraints so sessions are accessible under any Droid account.
 func ShareSessions(p Paths, opts ShareOptions, stdout io.Writer) error {
+	_, _ = MigrateStrandedSessions(p)
 	sessions, err := FindSessions(p.FactorySessions(), opts.SessionIDs)
 	if err != nil {
 		return fmt.Errorf("scan sessions: %w", err)

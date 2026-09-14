@@ -84,7 +84,7 @@ func SaveCurrent(p Paths, name string, opts SaveOptions, stdout io.Writer) error
 
 // SwitchOptions controls additional behavior during account switching.
 type SwitchOptions struct {
-	ShareSessions bool
+	NoShare bool
 }
 
 // SwitchAccount syncs the previous account and activates a saved auth pair.
@@ -93,7 +93,7 @@ func SwitchAccount(p Paths, name string, stdout io.Writer) error {
 }
 
 // SwitchAccountWithOptions syncs the previous account, activates saved auth,
-// and optionally shares sessions across accounts or notices org differences.
+// and automatically shares sessions across accounts unless NoShare is set.
 func SwitchAccountWithOptions(p Paths, name string, opts SwitchOptions, stdout io.Writer) error {
 	name, err := CleanAccountName(name)
 	if err != nil {
@@ -114,18 +114,16 @@ func SwitchAccountWithOptions(p Paths, name string, opts SwitchOptions, stdout i
 		return err
 	}
 
-	if opts.ShareSessions {
-		return ShareSessions(p, ShareOptions{}, stdout)
-	}
-
-	if prevCreds.ActiveOrganizationID != "" && targetCreds.ActiveOrganizationID != "" &&
+	if !opts.NoShare {
+		_ = ShareSessions(p, ShareOptions{}, io.Discard)
+	} else if prevCreds.ActiveOrganizationID != "" && targetCreds.ActiveOrganizationID != "" &&
 		prevCreds.ActiveOrganizationID != targetCreds.ActiveOrganizationID {
 		count, _ := CountBoundSessions(p.FactorySessions(), prevCreds.ActiveOrganizationID)
 		if count > 0 {
 			fmt.Fprintf(stdout, "\nNotice: %d session(s) belong to organization %q and will be hidden by Droid while %q is active.\n"+
 				"To make them accessible across accounts, run: droid-switcher share-sessions\n"+
-				"Or next time switch with: droid-switcher switch %s --share-sessions\n",
-				count, prevCreds.ActiveOrganizationID, name, name)
+				"Or switch without --no-share\n",
+				count, prevCreds.ActiveOrganizationID, name)
 		}
 	}
 	return nil
